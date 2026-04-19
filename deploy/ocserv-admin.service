@@ -1,0 +1,30 @@
+[Unit]
+Description=ocserv-admin localhost backend
+After=network.target
+
+[Service]
+Type=simple
+User=ocserv-admin
+Group=ocserv-admin
+WorkingDirectory=/opt/ocserv-admin
+Environment=OCSERV_ADMIN_HOST=127.0.0.1
+Environment=OCSERV_ADMIN_PORT=8080
+Environment=OCSERV_ADMIN_ALLOWED_ACTORS=mcp-client
+Environment=OCSERV_ADMIN_COMMAND_PREFIX=sudo -n
+Environment=OCSERV_ADMIN_USERS_FILE=/etc/ocserv/passwd
+Environment=OCSERV_ADMIN_MAIN_CONFIG_FILE=/etc/ocserv/ocserv.conf
+Environment=OCSERV_ADMIN_VALIDATE_COMMAND=/usr/sbin/ocserv --test-config --config /etc/ocserv/ocserv.conf
+Environment=OCSERV_ADMIN_GROUP_CONFIG_DIR=/etc/ocserv/config-per-group
+Environment=OCSERV_ADMIN_MAIN_CONFIG_TEMPLATE=/var/lib/ocserv-admin/templates/ocserv.conf.tpl
+Environment=OCSERV_ADMIN_GROUP_TEMPLATE_DIR=/var/lib/ocserv-admin/group-templates
+Environment=OCSERV_ADMIN_USER_GROUP_MAP_FILE=/var/lib/ocserv-admin/user-groups.json
+EnvironmentFile=/etc/ocserv-admin/ocserv-admin.env
+ExecStart=/usr/bin/python3 -m src.ocserv_admin_api
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/etc/ocserv /var/lib/ocserv-admin /var/log/ocserv-admin
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

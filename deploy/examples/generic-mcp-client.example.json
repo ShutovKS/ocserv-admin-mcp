@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "ocserv_admin": {
+      "command": "python3",
+      "args": ["-m", "src.mcp_server"],
+      "env": {
+        "OCSERV_ADMIN_BACKEND_URL": "http://127.0.0.1:8080",
+        "OCSERV_ADMIN_AUTH_TOKEN": "${OCSERV_ADMIN_AUTH_TOKEN}",
+        "OCSERV_ADMIN_CLIENT_ACTOR_ID": "mcp-client",
+        "OCSERV_ADMIN_GROUPS_FILE": "/var/lib/ocserv-admin/groups.json"
+      }
+    }
+  }
+}

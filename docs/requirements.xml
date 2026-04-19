@@ -1,0 +1,131 @@
+<RequirementsAnalysis VERSION="0.3.0">
+  <Project>
+    <name>ocserv-admin-mcp</name>
+    <annotation>A generic safe administrative package for `ocserv` that lets an operator manage VPN users, policy groups, and active sessions without manually editing server configuration. It exposes a constrained MCP tool surface and localhost backend for safe execution on the VPS, and can be integrated into Nanobot or any other MCP-capable agent.</annotation>
+    <keywords>ocserv, openconnect, anyconnect, mcp, vpn-admin, access-control, policy-groups, infrastructure-automation, audit-logging, agent-integration</keywords>
+  </Project>
+
+  <Actors>
+    <actor-Operator>Authorized human administrator using an approved MCP-capable client and the constrained tool surface to manage VPN users, groups, and sessions.</actor-Operator>
+    <actor-System>Constrained backend components that validate, execute, and audit approved administrative actions.</actor-System>
+    <actor-Ocserv>Target VPN service and control surface exposed through ocserv, occtl, systemctl, and config files.</actor-Ocserv>
+  </Actors>
+
+  <DomainModel>
+    <DM-USER>
+      <definition>VPN identity managed by the system and represented as the unit of create, disable, remove, and group-assignment operations.</definition>
+      <mvp-behavior>Usernames identify ocserv-facing access subjects, not operators, devices, or overlay-network objects.</mvp-behavior>
+    </DM-USER>
+    <DM-POLICY-GROUP>
+      <definition>ocserv policy group that controls access rules and routing policy applied to a VPN user.</definition>
+      <mvp-behavior>Group always means ocserv policy group and never a separate L3 network or tenant boundary.</mvp-behavior>
+    </DM-POLICY-GROUP>
+    <DM-SESSION>
+      <definition>Observed active VPN connection state returned by occtl for a connected VPN identity.</definition>
+      <mvp-behavior>Session operations act on real occtl-visible runtime state and do not imply persistent user configuration changes.</mvp-behavior>
+    </DM-SESSION>
+    <DM-COMMAND-AUDIT-ENTRY>
+      <definition>Structured audit record describing operator intent, approved action, target object, execution outcome, and failure boundary when present.</definition>
+      <mvp-behavior>Audit entries capture command intent and result without exposing secrets, credentials, or full config payloads.</mvp-behavior>
+    </DM-COMMAND-AUDIT-ENTRY>
+  </DomainModel>
+
+  <MvpAccessModel>
+    <decision-1>User means VPN identity.</decision-1>
+    <decision-2>Group means ocserv policy group, not a separate L3 network.</decision-2>
+    <decision-3>Network group in MVP means a named set of access rules or routes, not a distinct VPN overlay.</decision-3>
+    <decision-4>LAN-behind-client operations are deferred and remain out of MVP scope.</decision-4>
+  </MvpAccessModel>
+
+  <PublicToolSurface>
+    <tool-list_users PURPOSE="List managed VPN identities for operator inspection" />
+    <tool-list_sessions PURPOSE="Show current active ocserv sessions" />
+    <tool-disconnect_session PURPOSE="Disconnect an active ocserv session through a destructive confirmed action" />
+    <tool-create_user PURPOSE="Create a VPN identity and optionally associate the intended policy group" />
+    <tool-disable_user PURPOSE="Disable a VPN identity without silently deleting it" />
+    <tool-delete_user PURPOSE="Remove a VPN identity through a destructive confirmed action" />
+    <tool-assign_group PURPOSE="Assign an existing VPN identity to an ocserv policy group" />
+    <tool-reload_service PURPOSE="Validate config and reload ocserv safely" />
+    <tool-rollback_last_change PURPOSE="Restore the last config-affecting change through a destructive confirmed action" />
+    <tool-confirm_action PURPOSE="Confirm or cancel a pending destructive backend action token" />
+  </PublicToolSurface>
+
+  <UseCases>
+    <UC-001>
+      <Actor>Operator</Actor>
+      <Action>Create a VPN user and assign an ocserv policy group</Action>
+      <Goal>Provision access safely without manually editing server configuration</Goal>
+      <Preconditions>Operator is authorized, target identity is valid, requested group exists, and backend can reach required ocserv control surfaces.</Preconditions>
+      <AcceptanceCriteria>User creation is recorded in the audit log, the intended group assignment is applied, config validation passes, reload is safe, the user is visible afterward, and the operator receives a usable one-time credential or equivalent secure provisioning handoff.</AcceptanceCriteria>
+      <Priority>high</Priority>
+      <RelatedFlows>DF-ADD-USER</RelatedFlows>
+    </UC-001>
+    <UC-002>
+      <Actor>Operator</Actor>
+      <Action>Disable or remove a VPN user</Action>
+      <Goal>Perform destructive administration safely and on the correct identity</Goal>
+      <Preconditions>Operator is authorized, the target identity is resolved unambiguously, and a confirmation step has completed.</Preconditions>
+      <AcceptanceCriteria>Destructive action requires confirmation, the wrong identity is not modified, the final result is auditable, and failure states are surfaced clearly.</AcceptanceCriteria>
+      <Priority>high</Priority>
+      <RelatedFlows>DF-REMOVE-USER</RelatedFlows>
+    </UC-002>
+    <UC-003>
+      <Actor>Operator</Actor>
+      <Action>Inspect active sessions and disconnect an active session</Action>
+      <Goal>Provide real VPN session visibility and controlled active-session termination through the constrained operator surface.</Goal>
+      <Preconditions>Operator is authorized and active session information is available from occtl.</Preconditions>
+      <AcceptanceCriteria>Real sessions are listed accurately, session disconnect requires confirmation, the correct VPN identity is targeted, and the result is auditable when routed through the controlled operator surface.</AcceptanceCriteria>
+      <Priority>high</Priority>
+      <RelatedFlows>DF-SHOW-SESSIONS, DF-DISCONNECT-SESSION</RelatedFlows>
+    </UC-003>
+    <UC-004>
+      <Actor>Operator</Actor>
+      <Action>Assign a user to an ocserv policy group</Action>
+      <Goal>Apply intended access policy without corrupting unrelated configuration</Goal>
+      <Preconditions>Operator is authorized, target user exists, target group exists, and policy files are writable in the approved scope.</Preconditions>
+      <AcceptanceCriteria>Policy-group change requires confirmation, only the intended configuration is updated, unrelated policy files remain unchanged, validation passes, and the change is auditable.</AcceptanceCriteria>
+      <Priority>high</Priority>
+      <RelatedFlows>DF-ASSIGN-GROUP</RelatedFlows>
+    </UC-004>
+    <UC-005>
+      <Actor>System</Actor>
+      <Action>Validate config and reload ocserv safely</Action>
+      <Goal>Preserve service availability and create a clear rollback-oriented audit trail when reload fails</Goal>
+      <Preconditions>A configuration change is staged and the backend can run validation and reload commands safely.</Preconditions>
+      <AcceptanceCriteria>If validation or reload fails, execution stops, service availability is preserved where possible, and the audit record contains the intent, failure point, and outcome.</AcceptanceCriteria>
+      <Priority>high</Priority>
+      <RelatedFlows>DF-SAFE-RELOAD</RelatedFlows>
+    </UC-005>
+  </UseCases>
+
+  <NonGoals>
+    <item-1>Route orchestration is out of MVP.</item-1>
+    <item-2>LAN-behind-client publishing is out of MVP.</item-2>
+    <item-3>Firewall automation is out of MVP.</item-3>
+    <item-4>General-purpose infrastructure control outside user, session, and group administration is out of scope.</item-4>
+  </NonGoals>
+
+  <Constraints>
+    <constraint-1>The system must run on a Linux VPS under systemd and interact safely with ocserv, occtl, systemctl, and sudo-mediated operations.</constraint-1>
+    <constraint-2>The package exposes only the approved MCP tools and localhost backend; Telegram, chat UX, and agent orchestration remain outside the repository boundary.</constraint-2>
+    <constraint-7>Nanobot is one supported integration example, not a required runtime dependency of the package boundary.</constraint-7>
+    <constraint-3>Secrets, bot tokens, passwords, certificate material, and session cookies must never appear in logs.</constraint-3>
+    <constraint-4>Group means ocserv policy group, not a separate overlay network abstraction.</constraint-4>
+    <constraint-5>Initial scope is limited to user, session, and policy-group administration.</constraint-5>
+    <constraint-6>Any network-group wording in MVP must be interpreted as access-rule or route grouping, not as a separate VPN topology layer.</constraint-6>
+  </Constraints>
+
+  <Risks>
+    <risk-1>Destructive identity operations may target the wrong user if name resolution and confirmation flows are weak.</risk-1>
+    <risk-2>Policy-group changes may corrupt unrelated config if file writes are not tightly scoped.</risk-2>
+    <risk-3>Reload failures can degrade service availability unless validation and stop-on-failure behavior are enforced.</risk-3>
+    <risk-4>Session listings can drift from real occtl state if output parsing is brittle or stale.</risk-4>
+    <risk-5>Overly broad orchestration could exceed the constrained execution model intended for safe VPS administration.</risk-5>
+  </Risks>
+
+  <OpenQuestions>
+    <question-1>Should the localhost admin API remain private to MCP clients only, or also support a separate authenticated operator client later?</question-1>
+    <question-2>Which exact ocserv config files and policy file locations are canonical in the target deployment?</question-2>
+    <question-3>Should user provisioning integrate with certificates, password files, or an external identity source in later phases?</question-3>
+  </OpenQuestions>
+</RequirementsAnalysis>

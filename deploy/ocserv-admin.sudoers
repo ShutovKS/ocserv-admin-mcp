@@ -1,0 +1,12 @@
+Defaults:ocserv-admin !requiretty
+Defaults:ocserv-admin secure_path=/usr/sbin:/usr/bin:/sbin:/bin
+
+ocserv-admin ALL=(root) NOPASSWD: /usr/bin/occtl show users
+ocserv-admin ALL=(root) NOPASSWD: /usr/bin/occtl show sessions all
+ocserv-admin ALL=(root) NOPASSWD: /usr/bin/occtl disconnect user *
+ocserv-admin ALL=(root) NOPASSWD: /usr/bin/ocpasswd -c /etc/ocserv/passwd -g * *
+ocserv-admin ALL=(root) NOPASSWD: /usr/bin/ocpasswd -c /etc/ocserv/passwd -l *
+ocserv-admin ALL=(root) NOPASSWD: /usr/bin/ocpasswd -c /etc/ocserv/passwd -d *
+ocserv-admin ALL=(root) NOPASSWD: /usr/sbin/ocserv --test-config --config /etc/ocserv/ocserv.conf
+ocserv-admin ALL=(root) NOPASSWD: /usr/bin/systemctl reload ocserv
+ocserv-admin ALL=(root) NOPASSWD: /usr/bin/systemctl restart ocserv

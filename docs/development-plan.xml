@@ -1,0 +1,437 @@
+<DevelopmentPlan VERSION="0.3.0">
+  <ArchitectureNotes>
+    <objective>Provide a generic safe administrative package for ocserv that favors constrained execution, explicit confirmation for dangerous actions, and strong auditability over broad convenience.</objective>
+    <non-goal>Do not expand MVP into route orchestration, LAN publishing, firewall automation, or general-purpose infrastructure control.</non-goal>
+    <phase-0-anchor>Before implementation waves begin, freeze the access vocabulary so user means VPN identity, group means ocserv policy group, network-group wording means access rules or routes, and the operator surface stays limited to the approved public MCP tool vocabulary.</phase-0-anchor>
+    <risk-1>Unsafe coupling between orchestration and system mutation could bypass confirmation or write-scope safeguards.</risk-1>
+    <risk-2>Reload and policy-file changes need verification-first sequencing to avoid service disruption or unrelated config corruption.</risk-2>
+  </ArchitectureNotes>
+
+  <Modules>
+    <M-AUDIT-LOG NAME="audit_log" TYPE="UTILITY" LAYER="0" ORDER="1" STATUS="implemented">
+      <contract>
+        <purpose>Emit structured audit and operational records for every approved or rejected administrative action.</purpose>
+        <inputs>
+          <param name="event" type="AuditEvent" />
+        </inputs>
+        <outputs>
+          <param name="record" type="AuditRecord" />
+        </outputs>
+        <errors>
+          <error code="AUDIT_WRITE_FAILED" />
+        </errors>
+      </contract>
+      <interface>
+        <export-recordAuditEvent PURPOSE="Persist a redaction-aware action record" />
+        <export-buildAuditContext PURPOSE="Construct stable structured log context" />
+      </interface>
+      <depends>none</depends>
+      <target>
+        <source>src/audit_log.py</source>
+        <tests>tests/unit/test_audit_log.py</tests>
+      </target>
+      <observability>
+        <log-prefix>[AuditLog]</log-prefix>
+        <critical-block>BLOCK_RECORD_AUDIT_EVENT</critical-block>
+      </observability>
+      <verification-ref>V-M-AUDIT-LOG</verification-ref>
+      <notes>
+        <note-1>Design fields and redaction rules before wiring higher-risk modules.</note-1>
+      </notes>
+    </M-AUDIT-LOG>
+
+    <M-SAFETY-CONTROLS NAME="safety_controls" TYPE="UTILITY" LAYER="0" ORDER="2" STATUS="implemented">
+      <contract>
+        <purpose>Enforce allowlists, confirmation rules, dangerous-action guards, and operator rate limits before any system mutation occurs.</purpose>
+        <inputs>
+          <param name="action" type="ProposedAdminAction" />
+          <param name="actor" type="OperatorIdentity" />
+        </inputs>
+        <outputs>
+          <param name="decision" type="GuardDecision" />
+        </outputs>
+        <errors>
+          <error code="UNAUTHORIZED_OPERATOR" />
+          <error code="CONFIRMATION_REQUIRED" />
+        </errors>
+      </contract>
+      <interface>
+        <export-guardAction PURPOSE="Evaluate whether an action may proceed" />
+        <export-confirmDestructiveAction PURPOSE="Track and verify explicit confirmation for destructive actions" />
+        <export-checkRateLimit PURPOSE="Throttle repeated operator requests at the entry boundary" />
+      </interface>
+      <depends>M-AUDIT-LOG</depends>
+      <target>
+        <source>src/safety_controls.py</source>
+        <tests>tests/unit/test_safety_controls.py</tests>
+      </target>
+      <observability>
+        <log-prefix>[SafetyControls]</log-prefix>
+        <critical-block>BLOCK_EVALUATE_GUARD</critical-block>
+      </observability>
+      <verification-ref>V-M-SAFETY-CONTROLS</verification-ref>
+      <notes>
+        <note-1>This module gates destructive flows and should land before adapters that can mutate system state.</note-1>
+      </notes>
+    </M-SAFETY-CONTROLS>
+
+    <M-CONFIRMATION-STATE NAME="confirmation_state" TYPE="CORE_LOGIC" LAYER="0" ORDER="3" STATUS="implemented">
+      <contract>
+        <purpose>Track pending destructive actions, explicit confirmations, expiry, and replay-safe resolution state.</purpose>
+        <inputs>
+          <param name="request" type="PendingConfirmationRequest" />
+          <param name="callback" type="ConfirmationCallback" />
+        </inputs>
+        <outputs>
+          <param name="pending" type="PendingConfirmation" />
+          <param name="resolution" type="ConfirmationResolution" />
+        </outputs>
+        <errors>
+          <error code="CONFIRMATION_NOT_FOUND" />
+          <error code="CONFIRMATION_EXPIRED" />
+          <error code="CONFIRMATION_REPLAYED" />
+        </errors>
+      </contract>
+      <interface>
+        <export-createPendingConfirmation PURPOSE="Create a pending confirmation record for a destructive action" />
+        <export-resolvePendingConfirmation PURPOSE="Resolve a confirmation as confirmed, cancelled, expired, or replayed" />
+      </interface>
+      <depends>M-AUDIT-LOG, M-SAFETY-CONTROLS</depends>
+      <target>
+        <source>src/confirmation_state.py</source>
+        <tests>tests/unit/test_confirmation_state.py</tests>
+      </target>
+      <observability>
+        <log-prefix>[ConfirmationState]</log-prefix>
+        <critical-block>BLOCK_CREATE_PENDING_CONFIRMATION</critical-block>
+      </observability>
+      <verification-ref>V-M-CONFIRMATION-STATE</verification-ref>
+      <notes>
+        <note-1>Keep confirmation state deterministic so orchestrator retries and repeated MCP tool calls cannot replay destructive actions.</note-1>
+      </notes>
+    </M-CONFIRMATION-STATE>
+
+    <M-OCSERV-ADAPTER NAME="ocserv_adapter" TYPE="INTEGRATION" LAYER="1" ORDER="1" STATUS="implemented">
+      <contract>
+        <purpose>Wrap occtl, deterministic managed config files, validation, reload flows, post-change health checks, and rollback-safe activation in a constrained system adapter.</purpose>
+        <inputs>
+          <param name="command" type="ApprovedSystemAction" />
+        </inputs>
+        <outputs>
+          <param name="result" type="SystemActionResult" />
+        </outputs>
+        <errors>
+          <error code="OCCTL_EXECUTION_FAILED" />
+          <error code="CONFIG_VALIDATION_FAILED" />
+          <error code="SERVICE_RELOAD_FAILED" />
+        </errors>
+      </contract>
+      <interface>
+        <export-inventoryConfig PURPOSE="Inventory managed ocserv config, auth, and user-group mapping surfaces" />
+        <export-preflightMutation PURPOSE="Validate mutation preconditions and declare the deterministic write scope" />
+        <export-applyManagedMutation PURPOSE="Apply mutate -> validate -> reload -> verify with rollback on failure" />
+        <export-runOcctl PURPOSE="Run occtl commands and normalize structured output" />
+        <export-safeReload PURPOSE="Validate config and reload ocserv safely" />
+        <export-healthCheck PURPOSE="Run the approved ocserv health check command" />
+        <export-rollbackLastChange PURPOSE="Restore the last config-affecting managed-file change set" />
+      </interface>
+      <depends>M-AUDIT-LOG, M-SAFETY-CONTROLS</depends>
+      <target>
+        <source>src/ocserv_adapter.py</source>
+        <tests>tests/unit/test_ocserv_adapter.py</tests>
+      </target>
+      <observability>
+        <log-prefix>[OcservAdapter]</log-prefix>
+        <critical-block>BLOCK_SAFE_RELOAD</critical-block>
+      </observability>
+      <verification-ref>V-M-OCSERV-ADAPTER</verification-ref>
+      <notes>
+        <note-1>Prefer narrow subprocess wrappers that are easy to fake in tests.</note-1>
+        <note-2>The adapter owns the deterministic managed file set for main config, group policy files, auth store, and user-group mapping.</note-2>
+      </notes>
+    </M-OCSERV-ADAPTER>
+
+    <M-USER-LIFECYCLE NAME="user_lifecycle_manager" TYPE="CORE_LOGIC" LAYER="2" ORDER="1" STATUS="implemented">
+      <contract>
+        <purpose>Own VPN identity creation, disablement, removal, and existence checks against the chosen ocserv auth backend.</purpose>
+        <inputs>
+          <param name="username" type="str" />
+          <param name="requested_group" type="str" />
+        </inputs>
+        <outputs>
+          <param name="result" type="UserLifecycleResult" />
+        </outputs>
+        <errors>
+          <error code="USER_ALREADY_EXISTS" />
+          <error code="USER_NOT_FOUND" />
+          <error code="ACTIVE_USER_REQUIRES_FORCE" />
+        </errors>
+      </contract>
+      <interface>
+        <export-createUser PURPOSE="Create a VPN identity through the approved auth backend path" />
+        <export-disableUser PURPOSE="Disable a VPN identity without silently deleting it" />
+        <export-removeUser PURPOSE="Delete a VPN identity through the approved lifecycle path" />
+      </interface>
+      <depends>M-OCSERV-ADAPTER, M-AUDIT-LOG, M-SAFETY-CONTROLS</depends>
+      <target>
+        <source>src/user_lifecycle_manager.py</source>
+        <tests>tests/unit/test_user_lifecycle_manager.py</tests>
+      </target>
+      <observability>
+        <log-prefix>[UserLifecycleManager]</log-prefix>
+        <critical-block>BLOCK_APPLY_USER_CREATE</critical-block>
+      </observability>
+      <verification-ref>V-M-USER-LIFECYCLE</verification-ref>
+      <notes>
+        <note-1>This module makes user lifecycle ownership explicit instead of spreading create, disable, and remove semantics across the API and adapter layers.</note-1>
+        <note-2>Lifecycle mutations must return deterministic planned-file, changed-file, activation, and verification evidence to the API layer.</note-2>
+      </notes>
+    </M-USER-LIFECYCLE>
+
+    <M-POLICY-GROUP-MANAGER NAME="policy_group_manager" TYPE="CORE_LOGIC" LAYER="2" ORDER="2" STATUS="implemented">
+      <contract>
+        <purpose>Apply intended policy-group assignments and policy rendering updates without touching unrelated config.</purpose>
+        <inputs>
+          <param name="target_user" type="str" />
+          <param name="target_group" type="str" />
+        </inputs>
+        <outputs>
+          <param name="result" type="PolicyAssignmentResult" />
+        </outputs>
+        <errors>
+          <error code="GROUP_NOT_FOUND" />
+          <error code="POLICY_RENDER_FAILED" />
+        </errors>
+      </contract>
+      <interface>
+        <export-assignGroup PURPOSE="Assign a user to an ocserv policy group" />
+        <export-renderPolicyChanges PURPOSE="Generate scoped policy-file updates" />
+      </interface>
+      <depends>M-OCSERV-ADAPTER, M-AUDIT-LOG</depends>
+      <target>
+        <source>src/policy_group_manager.py</source>
+        <tests>tests/unit/test_policy_group_manager.py</tests>
+      </target>
+      <observability>
+        <log-prefix>[PolicyGroupManager]</log-prefix>
+        <critical-block>BLOCK_RENDER_POLICY_CHANGES</critical-block>
+      </observability>
+      <verification-ref>V-M-POLICY-GROUP-MANAGER</verification-ref>
+      <notes>
+        <note-1>Write scope and file-diff assertions are key evidence for this module.</note-1>
+        <note-2>Group assignment must operate only through the adapter-owned managed file set and emit validate -> reload -> verify evidence.</note-2>
+      </notes>
+    </M-POLICY-GROUP-MANAGER>
+
+    <M-SESSION-MANAGER NAME="session_manager" TYPE="CORE_LOGIC" LAYER="2" ORDER="3" STATUS="implemented">
+      <contract>
+        <purpose>Provide real session listing backed by occtl output.</purpose>
+        <inputs>
+          <param name="query" type="SessionQuery | none" />
+        </inputs>
+        <outputs>
+          <param name="sessions" type="list[SessionRecord]" />
+        </outputs>
+        <errors>
+          <error code="SESSION_QUERY_FAILED" />
+        </errors>
+      </contract>
+      <interface>
+        <export-listSessions PURPOSE="Return real active session state" />
+      </interface>
+      <depends>M-OCSERV-ADAPTER, M-AUDIT-LOG</depends>
+      <target>
+        <source>src/session_manager.py</source>
+        <tests>tests/unit/test_session_manager.py</tests>
+      </target>
+      <observability>
+        <log-prefix>[SessionManager]</log-prefix>
+        <critical-block>BLOCK_LIST_SESSIONS</critical-block>
+      </observability>
+      <verification-ref>V-M-SESSION-MANAGER</verification-ref>
+      <notes>
+        <note-1>Use parser tests against representative occtl outputs before wiring tool-facing flows.</note-1>
+        <note-2>Session termination is approved for the public MCP tool surface and must stay confirmation-gated through the shared backend flow.</note-2>
+      </notes>
+    </M-SESSION-MANAGER>
+
+    <M-OCSERV-ADMIN-API NAME="ocserv_admin_api" TYPE="INTEGRATION" LAYER="3" ORDER="1" STATUS="implemented">
+      <contract>
+        <purpose>Expose constrained localhost HTTP endpoints for approved user, session, group, and reload actions that only accept authenticated loopback clients.</purpose>
+        <inputs>
+          <param name="request" type="AdminActionRequest" />
+        </inputs>
+        <outputs>
+          <param name="response" type="AdminActionResponse" />
+        </outputs>
+        <errors>
+          <error code="INVALID_REQUEST" />
+          <error code="ACTION_NOT_ALLOWED" />
+        </errors>
+      </contract>
+      <interface>
+        <export-executeApprovedAction PURPOSE="Run one approved admin action through constrained handlers" />
+        <export-validateRequest PURPOSE="Validate request payloads and invariants" />
+      </interface>
+      <depends>M-SAFETY-CONTROLS, M-USER-LIFECYCLE, M-POLICY-GROUP-MANAGER, M-SESSION-MANAGER, M-OCSERV-ADAPTER, M-AUDIT-LOG</depends>
+      <target>
+        <source>src/ocserv_admin_api.py</source>
+        <tests>tests/integration/test_ocserv_admin_api.py</tests>
+      </target>
+      <observability>
+        <log-prefix>[OcservAdminApi]</log-prefix>
+        <critical-block>BLOCK_EXECUTE_APPROVED_ACTION</critical-block>
+      </observability>
+      <verification-ref>V-M-OCSERV-ADMIN-API</verification-ref>
+      <notes>
+        <note-1>Keep the API surface narrow, action-whitelisted, bound to localhost, and protected by a shared MCP-client-to-backend bearer token.</note-1>
+      </notes>
+    </M-OCSERV-ADMIN-API>
+
+    <M-BACKEND-CLIENT NAME="backend_client" TYPE="CORE_LOGIC" LAYER="4" ORDER="1" STATUS="implemented">
+      <contract>
+        <purpose>Provide a strict client boundary for approved backend actions and staged confirmation flows without direct administrative execution.</purpose>
+        <inputs>
+          <param name="request" type="ApprovedActionRequest" />
+          <param name="actor" type="OperatorIdentity" />
+        </inputs>
+        <outputs>
+          <param name="plan" type="ApprovedActionPlan" />
+        </outputs>
+        <errors>
+          <error code="ACTION_REQUIRES_CONFIRMATION" />
+        </errors>
+      </contract>
+      <interface>
+        <export-planAction PURPOSE="Validate an approved action request and normalize it for backend execution" />
+        <export-requireConfirmation PURPOSE="Stage confirmation for dangerous actions" />
+      </interface>
+      <depends>M-SAFETY-CONTROLS, M-CONFIRMATION-STATE, M-OCSERV-ADMIN-API, M-AUDIT-LOG</depends>
+      <target>
+        <source>src/backend_client.py</source>
+        <tests>tests/unit/test_backend_client.py</tests>
+      </target>
+      <observability>
+        <log-prefix>[BackendClient]</log-prefix>
+        <critical-block>BLOCK_PLAN_ACTION</critical-block>
+      </observability>
+      <verification-ref>V-M-BACKEND-CLIENT</verification-ref>
+      <notes>
+        <note-1>MCP clients must call only the localhost backend and must not execute ocserv administrative work directly.</note-1>
+        <note-2>The package boundary accepts only schema-valid tool invocations and does not perform free-text command interpretation.</note-2>
+      </notes>
+    </M-BACKEND-CLIENT>
+
+    <M-MCP-SERVER NAME="mcp_server" TYPE="INTEGRATION" LAYER="4" ORDER="2" STATUS="implemented">
+      <contract>
+        <purpose>Expose the approved ocserv admin actions as a strict local MCP stdio server for MCP-capable agents.</purpose>
+        <inputs>
+          <param name="mcp_request" type="JsonRpcRequest" />
+        </inputs>
+        <outputs>
+          <param name="mcp_response" type="JsonRpcResponse" />
+        </outputs>
+        <errors>
+          <error code="ACTION_NOT_ALLOWED" />
+          <error code="INVALID_REQUEST" />
+        </errors>
+      </contract>
+      <interface>
+        <export-OcservAdminMcpServer PURPOSE="Serve initialize, tools/list, and tools/call over stdio" />
+        <export-buildServerFromEnv PURPOSE="Build the MCP server from the localhost backend configuration" />
+      </interface>
+      <depends>M-BACKEND-CLIENT, M-OCSERV-ADMIN-API</depends>
+      <target>
+        <source>src/mcp_server.py</source>
+        <tests>tests/unit/test_mcp_server.py</tests>
+      </target>
+      <observability>
+        <log-prefix>[OcservAdminMcpServer]</log-prefix>
+        <critical-block>BLOCK_HANDLE_TOOL_CALL</critical-block>
+      </observability>
+      <verification-ref>V-M-MCP-SERVER</verification-ref>
+      <notes>
+        <note-1>The MCP server must expose only the approved MVP actions and never provide shell or direct config-edit tools.</note-1>
+      </notes>
+    </M-MCP-SERVER>
+  </Modules>
+
+  <DataFlow>
+    <DF-ADD-USER NAME="Add user with policy group" TRIGGER="Authorized operator requests user creation through an approved MCP client">
+      <step-1>The client submits an approved create-user tool call with schema-valid inputs.</step-1>
+      <step-2>The MCP server or direct backend client routes the approved action to the localhost admin API.</step-2>
+      <step-3>Admin API invokes user-lifecycle, policy-group, and ocserv adapter modules to create the user, assign the intended group, sync managed templates, validate config, request a safe reload, and verify the resulting state.</step-3>
+      <step-4>When the passwd-file backend is active, the operator receives a one-time provisioning credential in the successful create-user response.</step-4>
+      <step-5>Audit log records intent, deterministic file scope, activation evidence, and target identity without exposing credentials.</step-5>
+      <evidence>Verified user visibility after reload, scoped config changes, deterministic planned-file and changed-file evidence, secure one-time credential handoff for the passwd-file backend, and stable audit/log markers across the flow.</evidence>
+    </DF-ADD-USER>
+    <DF-REMOVE-USER NAME="Remove or disable user safely" TRIGGER="Authorized operator requests destructive identity change through an approved MCP client">
+      <step-1>The client submits a destructive approved action request for one intended VPN identity.</step-1>
+      <step-2>Confirmation state records a pending destructive action and gates confirm or cancel transitions.</step-2>
+      <step-3>Safety controls require explicit confirmation before execution.</step-3>
+      <step-4>Admin API executes the approved destructive action through user-lifecycle and constrained adapter modules, blocks active-user removal without force, then records the outcome.</step-4>
+      <evidence>Confirmation state, active-session force checks, correct target identity, and audit entries proving the destructive action did not run silently.</evidence>
+    </DF-REMOVE-USER>
+    <DF-SHOW-SESSIONS NAME="Inspect active sessions" TRIGGER="Authorized operator requests active session visibility through an approved MCP client">
+      <step-1>The MCP server or direct backend client routes the approved list-sessions action to the localhost admin API.</step-1>
+      <step-2>Session manager queries real session state from occtl through the ocserv adapter.</step-2>
+      <step-3>Structured session records are normalized for the operator-facing response.</step-3>
+      <step-4>Audit context records the inspection request and outcome when routed through controlled operator surfaces.</step-4>
+      <evidence>Parsed occtl output and stable structured session-state results.</evidence>
+    </DF-SHOW-SESSIONS>
+    <DF-DISCONNECT-SESSION NAME="Disconnect active session safely" TRIGGER="Authorized operator requests termination of an active VPN session through an approved MCP client">
+      <step-1>The client submits the disconnect request as a destructive action and routes it through the shared confirmation flow.</step-1>
+      <step-2>Confirmation state records a pending destructive action and requires confirm or cancel before execution.</step-2>
+      <step-3>Session manager calls the adapter-owned occtl disconnect surface for the requested VPN identity.</step-3>
+      <step-4>Audit log records both the confirmation boundary and the disconnect outcome.</step-4>
+      <evidence>Confirmation token lifecycle, structured disconnect command result, and audit entries proving the disconnect did not run silently.</evidence>
+    </DF-DISCONNECT-SESSION>
+    <DF-ASSIGN-GROUP NAME="Assign policy group without collateral edits" TRIGGER="Authorized operator changes a user group through an approved MCP client">
+      <step-1>The client treats the change as destructive and requires explicit confirmation before execution.</step-1>
+      <step-2>Group manager computes the intended policy-file change set for one user and one group.</step-2>
+      <step-3>Adapter writes only approved targets and validates the resulting config.</step-3>
+      <step-4>Safe reload runs if validation passes and the adapter verifies the requested final state.</step-4>
+      <evidence>Confirmation token lifecycle, file-diff evidence shows only intended config changed, unrelated policies remained intact, and verification confirms the requested user-group assignment.</evidence>
+    </DF-ASSIGN-GROUP>
+    <DF-SAFE-RELOAD NAME="Validate then reload with rollback-oriented behavior" TRIGGER="A staged config change requires activation">
+      <step-1>Adapter runs config validation before any reload attempt.</step-1>
+      <step-2>If validation fails, execution stops and the system records a failure audit event.</step-2>
+      <step-3>If reload or verify fails, managed files roll back to the pre-mutation snapshot and a clear failure record is emitted.</step-3>
+      <evidence>Validation status, reload status, verify status, rollback evidence, and audit evidence for stop-on-failure behavior.</evidence>
+    </DF-SAFE-RELOAD>
+  </DataFlow>
+
+  <ImplementationOrder>
+    <Phase-0 name="Access model lock" status="completed">
+      <goal>Remove ambiguity in the meaning of user, group, network-group wording, and the minimum public MCP tool surface before module implementation begins.</goal>
+      <step-1 status="completed">Lock the MVP domain model around User, PolicyGroup, Session, and CommandAuditEntry as the canonical access vocabulary.</step-1>
+      <step-2 status="completed">Freeze the public MCP tool surface to list_users, list_sessions, disconnect_session, create_user, disable_user, delete_user, assign_group, reload_service, rollback_last_change, and confirm_action.</step-2>
+      <evidence>requirements.xml, knowledge-graph.xml, and verification-plan.xml record the same access semantics and tool surface.</evidence>
+    </Phase-0>
+    <Phase-1 name="Safety foundation" status="completed">
+      <goal>Establish audit, guard, and adapter primitives before any operator-facing flow can mutate ocserv state.</goal>
+      <step-1 module="M-AUDIT-LOG" status="completed" verification="V-M-AUDIT-LOG">Implement structured audit logging and redaction-aware event schema.</step-1>
+      <step-2 module="M-SAFETY-CONTROLS" status="completed" verification="V-M-SAFETY-CONTROLS">Implement allowlists, confirmation primitives, and dangerous-action guards.</step-2>
+      <step-3 module="M-CONFIRMATION-STATE" status="completed" verification="V-M-CONFIRMATION-STATE">Implement pending confirmation tracking, expiry, and replay-safe resolution.</step-3>
+      <step-4 module="M-OCSERV-ADAPTER" status="completed" verification="V-M-OCSERV-ADAPTER">Implement constrained occtl, validation, and reload wrappers with safe failure behavior.</step-4>
+    </Phase-1>
+    <Phase-2 name="Administrative core flows" status="completed">
+      <goal>Make user, group, and session operations deterministic and testable on top of the safe adapter layer.</goal>
+      <step-1 module="M-USER-LIFECYCLE" status="completed" verification="V-M-USER-LIFECYCLE">Implement explicit create, disable, and remove lifecycle operations for VPN identities.</step-1>
+      <step-2 module="M-POLICY-GROUP-MANAGER" status="completed" verification="V-M-POLICY-GROUP-MANAGER">Implement policy-group assignment and scoped rendering logic.</step-2>
+      <step-3 module="M-SESSION-MANAGER" status="completed" verification="V-M-SESSION-MANAGER">Implement active session listing and approved disconnect behavior.</step-3>
+      <step-4 module="M-OCSERV-ADMIN-API" status="completed" verification="V-M-OCSERV-ADMIN-API">Expose the constrained admin API over approved actions.</step-4>
+    </Phase-2>
+    <Phase-3 name="Operator surfaces" status="completed">
+      <goal>Wire controlled MCP interaction surfaces without weakening the safety and audit model.</goal>
+      <step-1 module="M-BACKEND-CLIENT" status="completed" verification="V-M-BACKEND-CLIENT">Implement approved-action validation and confirmation-aware orchestration.</step-1>
+      <step-2 module="M-MCP-SERVER" status="completed" verification="V-M-MCP-SERVER">Expose the approved action vocabulary as strict MCP tools over local stdio transport.</step-2>
+    </Phase-3>
+  </ImplementationOrder>
+
+  <ExecutionPolicy>
+    <default-profile>balanced</default-profile>
+    <controller-owns>docs/development-plan.xml, docs/knowledge-graph.xml, docs/verification-plan.xml</controller-owns>
+    <worker-owns>Only approved module source files and module-local tests inside the scoped execution packet.</worker-owns>
+  </ExecutionPolicy>
+</DevelopmentPlan>

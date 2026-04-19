@@ -1,0 +1,185 @@
+<KnowledgeGraph>
+  <Project NAME="ocserv-admin-mcp" VERSION="0.3.0">
+    <keywords>ocserv, openconnect, anyconnect, mcp, vpn-admin, access-control, policy-groups, infrastructure-automation, audit-logging, agent-integration</keywords>
+    <annotation>A generic safe administrative package for `ocserv` that lets an operator manage VPN users, policy groups, and active sessions without manually editing server configuration. It exposes a constrained MCP tool surface and localhost backend for safe execution on the VPS, and can be integrated into Nanobot or any other MCP-capable agent.</annotation>
+
+    <DomainAnchors>
+      <DA-USER>
+        <meaning>User is the managed VPN identity.</meaning>
+      </DA-USER>
+      <DA-POLICY-GROUP>
+        <meaning>Group is an ocserv policy group, not a separate L3 network.</meaning>
+      </DA-POLICY-GROUP>
+      <DA-NETWORK-GROUP>
+        <meaning>Network-group wording in MVP refers to a set of access rules or routes rather than an overlay VPN construct.</meaning>
+      </DA-NETWORK-GROUP>
+      <DA-SESSION>
+        <meaning>Session is active occtl-visible runtime connection state for a VPN identity.</meaning>
+      </DA-SESSION>
+      <DA-COMMAND-AUDIT-ENTRY>
+        <meaning>CommandAuditEntry is the structured audit record for operator intent, execution, and outcome.</meaning>
+      </DA-COMMAND-AUDIT-ENTRY>
+    </DomainAnchors>
+
+    <PublicToolSurface>
+      <tool-list_users maps-to="M-MCP-SERVER,M-BACKEND-CLIENT,M-USER-LIFECYCLE" />
+      <tool-list_sessions maps-to="M-MCP-SERVER,M-BACKEND-CLIENT,M-SESSION-MANAGER" />
+      <tool-disconnect_session maps-to="M-MCP-SERVER,M-BACKEND-CLIENT,M-CONFIRMATION-STATE,M-SESSION-MANAGER,M-SAFETY-CONTROLS,M-OCSERV-ADAPTER" />
+      <tool-create_user maps-to="M-MCP-SERVER,M-BACKEND-CLIENT,M-USER-LIFECYCLE,M-POLICY-GROUP-MANAGER,M-OCSERV-ADAPTER" />
+      <tool-disable_user maps-to="M-MCP-SERVER,M-BACKEND-CLIENT,M-USER-LIFECYCLE,M-SAFETY-CONTROLS" />
+      <tool-delete_user maps-to="M-MCP-SERVER,M-BACKEND-CLIENT,M-CONFIRMATION-STATE,M-USER-LIFECYCLE,M-SAFETY-CONTROLS" />
+      <tool-assign_group maps-to="M-MCP-SERVER,M-BACKEND-CLIENT,M-POLICY-GROUP-MANAGER,M-OCSERV-ADAPTER" />
+      <tool-reload_service maps-to="M-MCP-SERVER,M-BACKEND-CLIENT,M-OCSERV-ADAPTER,M-SAFETY-CONTROLS" />
+      <tool-rollback_last_change maps-to="M-MCP-SERVER,M-BACKEND-CLIENT,M-CONFIRMATION-STATE,M-SAFETY-CONTROLS,M-OCSERV-ADAPTER" />
+      <tool-confirm_action maps-to="M-MCP-SERVER,M-BACKEND-CLIENT,M-CONFIRMATION-STATE,M-SAFETY-CONTROLS" />
+    </PublicToolSurface>
+
+    <M-BACKEND-CLIENT NAME="backend_client" TYPE="CORE_LOGIC" STATUS="implemented">
+      <purpose>Validate approved action requests and translate them into constrained localhost backend calls without performing administrative work directly.</purpose>
+      <path>src/backend_client.py</path>
+      <depends>M-SAFETY-CONTROLS, M-CONFIRMATION-STATE, M-OCSERV-ADMIN-API, M-AUDIT-LOG</depends>
+      <verification-ref>V-M-BACKEND-CLIENT</verification-ref>
+      <annotations>
+        <fn-planAction PURPOSE="Validate an approved admin action request" />
+        <fn-requireConfirmation PURPOSE="Escalate dangerous actions into an explicit confirmation flow" />
+        <type-MvpCommand PURPOSE="Canonical public tool vocabulary locked in Phase 0" />
+      </annotations>
+    </M-BACKEND-CLIENT>
+
+    <M-MCP-SERVER NAME="mcp_server" TYPE="INTEGRATION" STATUS="implemented">
+      <purpose>Expose the approved admin tool vocabulary through a local MCP stdio server that routes only to the localhost backend.</purpose>
+      <path>src/mcp_server.py</path>
+      <depends>M-BACKEND-CLIENT, M-OCSERV-ADMIN-API</depends>
+      <verification-ref>V-M-MCP-SERVER</verification-ref>
+      <annotations>
+        <fn-handle_message PURPOSE="Serve initialize, tools/list, and tools/call requests for the strict public admin tool set" />
+        <fn-buildServerFromEnv PURPOSE="Build the MCP server from environment-configured backend settings" />
+      </annotations>
+    </M-MCP-SERVER>
+
+    <M-TOOL-POLICY NAME="tool_policy" TYPE="CONFIG" STATUS="implemented">
+      <purpose>Provide workspace instructions that force ocserv administration through the approved tool surface instead of shell or direct config edits.</purpose>
+      <path>TOOLS.md</path>
+      <depends>M-MCP-SERVER</depends>
+      <verification-ref>V-M-MCP-SERVER</verification-ref>
+      <annotations>
+        <fn-policy PURPOSE="Constrain MCP clients to approved backend tools and response handling rules" />
+      </annotations>
+    </M-TOOL-POLICY>
+
+    <M-OCSERV-ADMIN-API NAME="ocserv_admin_api" TYPE="INTEGRATION" STATUS="implemented">
+      <purpose>Expose a constrained localhost HTTP backend that implements the whitelist of allowed administrative operations and only accepts authenticated loopback clients.</purpose>
+      <path>src/ocserv_admin_api.py</path>
+      <depends>M-SAFETY-CONTROLS, M-USER-LIFECYCLE, M-POLICY-GROUP-MANAGER, M-SESSION-MANAGER, M-OCSERV-ADAPTER, M-AUDIT-LOG</depends>
+      <verification-ref>V-M-OCSERV-ADMIN-API</verification-ref>
+      <annotations>
+        <fn-executeApprovedAction PURPOSE="Run a single approved admin action under policy constraints and return structured activation evidence" />
+        <fn-validateRequest PURPOSE="Validate API payloads, including force-delete preconditions" />
+        <fn-build_app PURPOSE="Construct the localhost WSGI application callable" />
+        <fn-serve PURPOSE="Run the localhost admin API server" />
+      </annotations>
+    </M-OCSERV-ADMIN-API>
+
+    <M-OCSERV-ADAPTER NAME="ocserv_adapter" TYPE="INTEGRATION" STATUS="implemented">
+      <purpose>Wrap ocserv system operations, deterministic managed config files, validation, reload handling, rollback, and command execution safely.</purpose>
+      <path>src/ocserv_adapter.py</path>
+      <depends>M-AUDIT-LOG, M-SAFETY-CONTROLS</depends>
+      <verification-ref>V-M-OCSERV-ADAPTER</verification-ref>
+      <annotations>
+        <fn-inventoryConfig PURPOSE="Inventory managed config, auth, group templates, and user-group mapping surfaces" />
+        <fn-preflightMutation PURPOSE="Validate mutation preconditions and deterministic write scope before edits" />
+        <fn-applyManagedMutation PURPOSE="Apply mutate -> validate -> reload -> verify with rollback on failure" />
+        <fn-runOcctl PURPOSE="Execute occtl commands and normalize outputs" />
+        <fn-validateConfig PURPOSE="Validate ocserv-related config before service mutation" />
+        <fn-reloadService PURPOSE="Reload ocserv safely with rollback-oriented safeguards" />
+      </annotations>
+    </M-OCSERV-ADAPTER>
+
+    <M-USER-LIFECYCLE NAME="user_lifecycle_manager" TYPE="CORE_LOGIC" STATUS="implemented">
+      <purpose>Own VPN identity creation, disablement, removal, and existence checks against the chosen ocserv auth backend.</purpose>
+      <path>src/user_lifecycle_manager.py</path>
+      <depends>M-OCSERV-ADAPTER, M-AUDIT-LOG, M-SAFETY-CONTROLS</depends>
+      <verification-ref>V-M-USER-LIFECYCLE</verification-ref>
+      <annotations>
+        <fn-createUser PURPOSE="Create a VPN identity through the approved auth backend path with deterministic activation evidence" />
+        <fn-disableUser PURPOSE="Disable a VPN identity without silently deleting it" />
+        <fn-removeUser PURPOSE="Delete a VPN identity through the approved lifecycle path with active-session force protection" />
+        <fn-listUsers PURPOSE="List managed VPN identities from the canonical user store" />
+      </annotations>
+    </M-USER-LIFECYCLE>
+
+    <M-POLICY-GROUP-MANAGER NAME="policy_group_manager" TYPE="CORE_LOGIC" STATUS="implemented">
+      <purpose>Assign users to ocserv policy groups and render policy-related configuration changes safely.</purpose>
+      <path>src/policy_group_manager.py</path>
+      <depends>M-OCSERV-ADAPTER, M-AUDIT-LOG</depends>
+      <verification-ref>V-M-POLICY-GROUP-MANAGER</verification-ref>
+      <annotations>
+        <fn-assignGroup PURPOSE="Assign a user to the intended ocserv policy group through the deterministic adapter pipeline" />
+        <fn-renderPolicyChanges PURPOSE="Describe scoped policy rendering without corrupting unrelated files" />
+      </annotations>
+    </M-POLICY-GROUP-MANAGER>
+
+    <M-SESSION-MANAGER NAME="session_manager" TYPE="CORE_LOGIC" STATUS="implemented">
+      <purpose>List active sessions and disconnect active sessions through verified ocserv control surfaces.</purpose>
+      <path>src/session_manager.py</path>
+      <depends>M-OCSERV-ADAPTER, M-AUDIT-LOG</depends>
+      <verification-ref>V-M-SESSION-MANAGER</verification-ref>
+      <annotations>
+        <fn-listSessions PURPOSE="Retrieve real active session state from occtl" />
+        <fn-disconnectSessionForUser PURPOSE="Disconnect an active ocserv session for one VPN identity" />
+      </annotations>
+    </M-SESSION-MANAGER>
+
+    <M-AUDIT-LOG NAME="audit_log" TYPE="UTILITY" STATUS="implemented">
+      <purpose>Emit an immutable-ish operation trail with structured redaction-aware fields for administrative actions.</purpose>
+      <path>src/audit_log.py</path>
+      <depends>none</depends>
+      <verification-ref>V-M-AUDIT-LOG</verification-ref>
+      <annotations>
+        <fn-recordAuditEvent PURPOSE="Record action intent, outcome, and safe evidence fields" />
+        <type-AuditRecord PURPOSE="Structured audit event schema" />
+      </annotations>
+    </M-AUDIT-LOG>
+
+    <M-SAFETY-CONTROLS NAME="safety_controls" TYPE="UTILITY" STATUS="implemented">
+      <purpose>Enforce confirmations, allowlists, dangerous-action guards, and execution invariants before system mutation.</purpose>
+      <path>src/safety_controls.py</path>
+      <depends>M-AUDIT-LOG</depends>
+      <verification-ref>V-M-SAFETY-CONTROLS</verification-ref>
+      <annotations>
+        <fn-guardAction PURPOSE="Reject unsafe or out-of-scope actions before execution" />
+        <fn-confirmDestructiveAction PURPOSE="Require explicit confirmation for destructive operations" />
+      </annotations>
+    </M-SAFETY-CONTROLS>
+
+    <M-CONFIRMATION-STATE NAME="confirmation_state" TYPE="CORE_LOGIC" STATUS="implemented">
+      <purpose>Track pending destructive actions, explicit confirmations, expiry, and replay-safe state transitions.</purpose>
+      <path>src/confirmation_state.py</path>
+      <depends>M-AUDIT-LOG, M-SAFETY-CONTROLS</depends>
+      <verification-ref>V-M-CONFIRMATION-STATE</verification-ref>
+      <annotations>
+        <fn-createPendingConfirmation PURPOSE="Create a pending destructive-action confirmation record" />
+        <fn-resolvePendingConfirmation PURPOSE="Resolve a confirmation as confirmed, cancelled, expired, or replayed" />
+      </annotations>
+    </M-CONFIRMATION-STATE>
+
+    <CrossLink from="M-MCP-SERVER" to="M-BACKEND-CLIENT" relation="uses strict action planning and response normalization from" />
+    <CrossLink from="M-MCP-SERVER" to="M-OCSERV-ADMIN-API" relation="routes approved tool calls to over bearer-authenticated loopback HTTP" />
+    <CrossLink from="M-TOOL-POLICY" to="M-MCP-SERVER" relation="forces clients to use the approved MCP tool surface exposed by" />
+    <CrossLink from="M-BACKEND-CLIENT" to="M-OCSERV-ADMIN-API" relation="dispatches approved actions to over bearer-authenticated loopback HTTP" />
+    <CrossLink from="M-BACKEND-CLIENT" to="M-CONFIRMATION-STATE" relation="hydrates approved destructive actions from" />
+    <CrossLink from="M-BACKEND-CLIENT" to="M-SAFETY-CONTROLS" relation="consults confirmation and guard policy in" />
+    <CrossLink from="M-OCSERV-ADMIN-API" to="M-OCSERV-ADAPTER" relation="executes system operations through" />
+    <CrossLink from="M-OCSERV-ADMIN-API" to="M-SAFETY-CONTROLS" relation="enforces operation guards with" />
+    <CrossLink from="M-OCSERV-ADMIN-API" to="M-USER-LIFECYCLE" relation="delegates user create, disable, and remove operations to" />
+    <CrossLink from="M-OCSERV-ADMIN-API" to="M-POLICY-GROUP-MANAGER" relation="delegates group assignment logic to" />
+    <CrossLink from="M-OCSERV-ADMIN-API" to="M-SESSION-MANAGER" relation="delegates session operations to" />
+    <CrossLink from="M-USER-LIFECYCLE" to="M-OCSERV-ADAPTER" relation="executes auth-backend and deterministic config-safe lifecycle changes through" />
+    <CrossLink from="M-USER-LIFECYCLE" to="M-SAFETY-CONTROLS" relation="requires identity and destructive-action policy from" />
+    <CrossLink from="M-POLICY-GROUP-MANAGER" to="M-OCSERV-ADAPTER" relation="applies ocserv policy changes through deterministic managed-file mutations" />
+    <CrossLink from="M-SESSION-MANAGER" to="M-OCSERV-ADAPTER" relation="queries active sessions through" />
+    <CrossLink from="M-SAFETY-CONTROLS" to="M-AUDIT-LOG" relation="records rejected and confirmed actions with" />
+    <CrossLink from="M-CONFIRMATION-STATE" to="M-AUDIT-LOG" relation="records confirmation lifecycle events with" />
+    <CrossLink from="M-OCSERV-ADAPTER" to="M-AUDIT-LOG" relation="emits system action outcomes through" />
+  </Project>
+</KnowledgeGraph>

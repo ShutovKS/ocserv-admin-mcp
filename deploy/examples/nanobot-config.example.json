@@ -1,0 +1,42 @@
+{
+  "agents": {
+    "defaults": {
+      "workspace": "/opt/ocserv-admin",
+      "model": "anthropic/claude-opus-4-5",
+      "provider": "openrouter",
+      "maxToolIterations": 20
+    }
+  },
+  "tools": {
+    "restrictToWorkspace": true,
+    "mcpServers": {
+      "ocserv_admin": {
+        "type": "stdio",
+        "command": "python3",
+        "args": ["-m", "src.mcp_server"],
+        "env": {
+          "OCSERV_ADMIN_BACKEND_URL": "http://127.0.0.1:8080",
+          "OCSERV_ADMIN_AUTH_TOKEN": "${OCSERV_ADMIN_AUTH_TOKEN}",
+          "OCSERV_ADMIN_CLIENT_ACTOR_ID": "nanobot",
+          "OCSERV_ADMIN_GROUPS_FILE": "/var/lib/ocserv-admin/groups.json"
+        },
+        "enabledTools": [
+          "list_users",
+          "list_sessions",
+          "disconnect_session",
+          "create_user",
+          "disable_user",
+          "delete_user",
+          "assign_group",
+          "reload_service",
+          "rollback_last_change",
+          "confirm_action"
+        ]
+      }
+    },
+    "exec": {
+      "timeout": 30,
+      "sandbox": "bwrap"
+    }
+  }
+}

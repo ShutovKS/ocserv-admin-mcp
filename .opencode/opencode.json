@@ -1,0 +1,21 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "ocserv_admin": {
+      "type": "local",
+      "command": [
+        "python3",
+        "-m",
+        "src.mcp_server"
+      ],
+      "enabled": true,
+      "environment": {
+        "PYTHONPATH": ".:/root/.local/lib/python3.12/site-packages",
+        "OCSERV_ADMIN_BACKEND_URL": "http://127.0.0.1:18080",
+        "OCSERV_ADMIN_AUTH_TOKEN": "dev-secret-token",
+        "OCSERV_ADMIN_CLIENT_ACTOR_ID": "mcp-client",
+        "OCSERV_ADMIN_GROUPS_FILE": "./.runtime-dev/groups.json"
+      }
+    }
+  }
+}

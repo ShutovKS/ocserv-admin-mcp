@@ -1,0 +1,53 @@
+<TechnologyStack VERSION="0.3.0">
+  <Runtime>CPython 3.12 under systemd on a Linux VPS</Runtime>
+  <Language>Python 3.12</Language>
+  <Framework>WSGI over the Python standard library for the localhost admin API, with MCP-capable clients calling the backend over authenticated loopback HTTP and using a local MCP stdio server for the approved tool surface.</Framework>
+
+  <Dependencies>
+    <dep name="nanobot" version="optional-example" purpose="One supported MCP-capable agent integration example; not part of the required runtime boundary" />
+    <dep name="jinja2" version="optional" purpose="Config or policy templating if rendered file generation is required" />
+    <dep name="typer" version="optional" purpose="Local admin CLI wrapper for non-MCP maintenance operations" />
+    <dep name="ocserv" version="system-managed" purpose="VPN service being administered" />
+    <dep name="occtl" version="system-managed" purpose="Session and control-plane command interface for ocserv" />
+    <dep name="systemctl" version="system-managed" purpose="Service management and reload invocation under Linux" />
+    <dep name="sudo" version="system-managed" purpose="Privilege boundary for approved administrative operations" />
+  </Dependencies>
+
+  <VersionConstraints>
+    <constraint lib="python" min="3.12.0" max="3.12.x" reason="Implementation should target Python 3.12 semantics and typing surface." />
+  </VersionConstraints>
+
+  <Tooling>
+    <tool name="test-runner" value="python -m unittest" version="builtin" />
+    <tool name="assertion-style" value="unittest assertions" version="builtin" />
+    <tool name="process-supervisor" value="systemd" version="system-managed" />
+    <tool name="service-control" value="occtl, systemctl, sudo" version="system-managed" />
+  </Tooling>
+
+  <Testing>
+    <module-level>
+      <command>python3 -m unittest discover -s tests/unit -v</command>
+      <focus>Fast deterministic unit and contract checks for adapters, action validation, guard logic, and the MCP server.</focus>
+    </module-level>
+    <wave-level>
+      <command>python3 -m unittest discover -s tests/integration -v</command>
+      <focus>Integration checks for merged surfaces such as MCP-to-backend routing and ocserv control flows.</focus>
+    </wave-level>
+    <phase-level>
+      <command>python3 -m unittest discover -s tests -v</command>
+      <focus>Broader regression confidence across user, group, session, reload, and rollback paths.</focus>
+    </phase-level>
+    <mocking-policy>Mock subprocess and system calls narrowly, use temp directories for config rendering tests, and prefer narrow fake adapters or local app clients over broad monkeypatching.</mocking-policy>
+  </Testing>
+
+  <Observability>
+    <logger>JSON-lines audit logging through the Python standard library</logger>
+    <log-format>[Module][function][BLOCK_NAME] message</log-format>
+    <required-fields>timestamp, level, event, request_id, actor_type, actor_id, command, target_user, target_group, result, reload_status, error_code</required-fields>
+    <redaction>Never log secrets, backend auth tokens, passwords, cert material, session cookies, or full config bodies. Audit logs should record action intent and result, not credentials.</redaction>
+  </Observability>
+
+  <DeliveryShape>
+    <shape>MCP-capable clients talk only to a constrained localhost WSGI backend over bearer-authenticated loopback HTTP and use a local MCP stdio server that exposes only the approved ocserv administration tools.</shape>
+  </DeliveryShape>
+</TechnologyStack>

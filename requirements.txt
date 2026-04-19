@@ -1,0 +1,6 @@
+# ocserv-admin-mcp depends on the official Python MCP SDK for its stdio server.
+#
+# Install with:
+#   python3 -m pip install --requirement requirements.txt
+
+mcp
