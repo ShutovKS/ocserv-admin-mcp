@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ "$#" -lt 2 || "$1" != "-n" ]]; then
+  printf 'fake sudo requires -n and a command\n' >&2
+  exit 1
+fi
+
+shift
+exec "$@"

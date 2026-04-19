@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ "$#" -eq 2 && "$1" == "show" && "$2" == "users" ]]; then
+  exec python3 /root/nanobot-ocserv-manager/tests/fixtures/fake_success.py show-users
+fi
+
+if [[ "$#" -eq 2 && "$1" == "show" && "$2" == "sessions" ]]; then
+  exec python3 /root/nanobot-ocserv-manager/tests/fixtures/fake_success.py show-sessions
+fi
+
+printf 'unsupported occtl command\n' >&2
+exit 1
