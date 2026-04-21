@@ -112,6 +112,8 @@ class OcservAdminMcpServerIntegrationTests(unittest.TestCase):
             tools = asyncio.run(server.list_tools())
             create_user = next(tool for tool in tools if tool.name == "create_user")
             self.assertEqual(create_user.input_schema["properties"]["group"]["enum"], ["default", "admins"])
+            delete_group = next(tool for tool in tools if tool.name == "delete_group")
+            self.assertEqual(delete_group.input_schema["properties"]["group"]["enum"], ["default", "admins"])
 
     def test_mvp_tools_execute_through_mcp_surface(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -132,13 +134,16 @@ class OcservAdminMcpServerIntegrationTests(unittest.TestCase):
                 created = self._call(server, "create_user", {"username": "alice", "group": "default"})
                 listed = self._call(server, "list_users", {})
                 sessions = self._call(server, "list_sessions", {})
+                groups = self._call(server, "list_groups", {})
                 reload_result = self._call(server, "reload_service", {})
 
             self.assertEqual(created["result"]["status"], "ok")
             self.assertEqual(created["entities"]["user"]["username"], "alice")
             self.assertEqual(listed["result"]["status"], "ok")
             self.assertEqual(listed["entities"]["users"][0]["username"], "alice")
-            self.assertEqual(sessions["entities"]["sessions"][0]["name"], "alice")
+            session_user = sessions["entities"]["sessions"][0].get("name") or sessions["entities"]["sessions"][0].get("username")
+            self.assertEqual(session_user, "alice")
+            self.assertIsNotNone(groups["entities"]["groups"])
             self.assertTrue(reload_result["reload"]["ok"])
 
     def test_list_sessions_markdown_and_pagination_are_applied_at_mcp_layer(self) -> None:

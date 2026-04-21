@@ -181,14 +181,24 @@ class OcservAdminApiTests(unittest.TestCase):
             ):
                 create_status, _ = self._request(app, "/actions/create_user", {"username": "alice", "group": "default"})
                 self.assertEqual(create_status, "200 OK")
-                pending_status, pending_payload = self._request(app, "/actions/delete_user", {"username": "alice"})
+                pending_status, pending_payload = self._request(app, "/actions/delete_user", {"username": "alice", "force": True})
                 self.assertEqual(pending_status, "200 OK")
-                confirm_status, confirm_payload = self._request(app, "/actions/confirm_action", {"token": pending_payload["token"], "decision": "confirm", "force": True})
+                confirm_status, confirm_payload = self._request(app, "/actions/confirm_action", {"token": pending_payload["token"], "decision": "confirm", "expected_action": "delete_user", "expected_username": pending_payload["confirmation"]["target_user"]})
             self.assertEqual(confirm_status, "200 OK")
             self.assertTrue(confirm_payload["ok"])
             users_status, users_payload = self._request(app, "/actions/list_users", {})
             self.assertEqual(users_status, "200 OK")
             self.assertEqual(users_payload["users"], [])
+
+    def test_confirm_action_rejects_context_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = self._config(temp_dir)
+            app = build_app(config)
+            pending_status, pending_payload = self._request(app, "/actions/delete_user", {"username": "alice"})
+            self.assertEqual(pending_status, "200 OK")
+            confirm_status, confirm_payload = self._request(app, "/actions/confirm_action", {"token": pending_payload["token"], "decision": "confirm", "expected_action": "disable_user"})
+            self.assertEqual(confirm_status, "400 Bad Request")
+            self.assertEqual(confirm_payload["error_code"], "INVALID_CONFIRMATION_CONTEXT")
 
     def test_create_user_rejects_unknown_group(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -269,6 +279,29 @@ class OcservAdminApiTests(unittest.TestCase):
             self.assertEqual(reload_status, "200 OK")
             self.assertTrue(reload_payload["reload"]["ok"])
             self.assertTrue(reload_payload["reload"]["health"]["ok"])
+
+    def test_list_groups_and_show_user_ips(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            runtime = Path(temp_dir)
+            (runtime / "groups.json").write_text(json.dumps({"groups": ["default", "admins"]}) + "\n", encoding="utf-8")
+            (runtime / "groups.d").mkdir(exist_ok=True)
+            (runtime / "groups.d" / "admins.conf").write_text("ipv4-network = 10.66.99.0/24\nipv4-netmask = 255.255.255.0\nroute = 10.66.99.0/255.255.255.0\n", encoding="utf-8")
+            config = AdminApiConfig(
+                host="127.0.0.1",
+                port=8080,
+                allowed_actors=("admin",),
+                auth_token="secret-token",
+                paths=OcservPaths(runtime / "users.json", runtime / "groups.json", runtime / "audit.log", validate_command=("validate",), reload_command=("reload",), group_config_dir=runtime / "groups.d"),
+            )
+            app = build_app(config)
+            with patch("src.ocserv_adapter._run_command", return_value=SystemCommandResult(True, '[{"username":"alice","ip":"10.0.0.1","group":"admins"}]', "", 0)):
+                groups_status, groups_payload = self._request(app, "/actions/list_groups", {})
+                user_ips_status, user_ips_payload = self._request(app, "/actions/show_user_ips", {})
+            self.assertEqual(groups_status, "200 OK")
+            admins_group = next(group for group in groups_payload["groups"] if group["group"] == "admins")
+            self.assertEqual(admins_group["ipv4_network"], "10.66.99.0/24")
+            self.assertEqual(user_ips_status, "200 OK")
+            self.assertEqual(user_ips_payload["user_ips"][0]["ip"], "10.0.0.1")
 
     def test_rollback_last_change_requires_confirmation_then_executes(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

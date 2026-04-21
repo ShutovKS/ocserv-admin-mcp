@@ -22,11 +22,16 @@ class BackendClientTests(unittest.TestCase):
             [
                 "list_users",
                 "list_sessions",
+                "list_groups",
+                "show_user_ips",
                 "disconnect_session",
                 "create_user",
                 "disable_user",
+                "disable_group_users",
                 "delete_user",
                 "assign_group",
+                "create_group",
+                "delete_group",
                 "reload_service",
                 "rollback_last_change",
                 "confirm_action",
@@ -75,14 +80,29 @@ class BackendClientTests(unittest.TestCase):
     def test_normalize_backend_response_marks_pending_confirmation(self) -> None:
         normalized = normalizeBackendResponse(
             "delete_user",
-            {"ok": False, "status": "pending_confirmation", "token": "tok-1", "error_code": "CONFIRMATION_REQUIRED"},
+            {"ok": False, "status": "pending_confirmation", "token": "tok-1", "error_code": "CONFIRMATION_REQUIRED", "confirmation": {"action": "delete_user"}},
         )
         self.assertEqual(normalized["result"]["status"], "pending_confirmation")
         self.assertEqual(normalized["entities"]["token"], "tok-1")
+        self.assertEqual(normalized["entities"]["confirmation"]["action"], "delete_user")
         self.assertEqual(
             normalized["actionable_error"]["next_step"],
             "Call confirm_action with the returned token and a confirm or cancel decision.",
         )
+
+    def test_plan_action_accepts_group_bulk_and_group_crud_fields(self) -> None:
+        action, payload = planAction("disable_group_users", group="admins")
+        self.assertEqual(action, "disable_group_users")
+        self.assertEqual(payload, {"group": "admins"})
+
+        action, payload = planAction("create_group", group="vpn-a", ipv4_network="10.10.10.0/24", ipv4_netmask="255.255.255.0", routes=["10.10.10.0/255.255.255.0"])
+        self.assertEqual(action, "create_group")
+        self.assertEqual(payload["group"], "vpn-a")
+        self.assertEqual(payload["routes"], ["10.10.10.0/255.255.255.0"])
+
+    def test_plan_action_rejects_invalid_routes(self) -> None:
+        with self.assertRaisesRegex(ValueError, "INVALID_REQUEST:routes"):
+            planAction("create_group", group="vpn-a", routes="10.0.0.0/8")
 
     def test_normalize_backend_response_preserves_reload_evidence(self) -> None:
         normalized = normalizeBackendResponse(
