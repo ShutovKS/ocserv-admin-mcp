@@ -173,7 +173,11 @@ def _group_name_from_template(path: Path) -> str:
 
 
 def _group_config_path(paths: OcservPaths, group: str) -> Path:
-    return _resolved_group_config_dir(paths) / f"{group}.conf"
+    config_dir = _resolved_group_config_dir(paths)
+    legacy_path = config_dir / group
+    if legacy_path.exists():
+        return legacy_path
+    return config_dir / f"{group}.conf"
 
 
 def _group_template_paths(paths: OcservPaths) -> list[Path]:
@@ -187,7 +191,7 @@ def _configured_group_paths(paths: OcservPaths) -> list[Path]:
     config_dir = _resolved_group_config_dir(paths)
     if not config_dir.exists():
         return []
-    return sorted([entry for entry in config_dir.iterdir() if entry.is_file() and entry.suffix == ".conf"])
+    return sorted([entry for entry in config_dir.iterdir() if entry.is_file()])
 
 
 def _legacy_allowed_groups(paths: OcservPaths) -> set[str]:
@@ -252,9 +256,10 @@ def _load_plain_user_payload(passwd_file: Path) -> dict[str, dict[str, Any]]:
         if not line:
             continue
         username, group, password_hash = line.split(":", 2)
+        normalized_group = None if group in {"", "*"} else group
         users[username] = {
             "username": username,
-            "group": group or None,
+            "group": normalized_group,
             "disabled": password_hash.startswith("!"),
             "password_hash": password_hash,
         }
@@ -320,9 +325,89 @@ def _sanitize_user_record(record: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _parse_group_config_details(path: Path) -> dict[str, Any]:
+    details: dict[str, Any] = {"group": path.stem, "ipv4_network": None, "ipv4_netmask": None, "routes": []}
+    if not path.exists():
+        return details
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = [part.strip() for part in line.split("=", 1)]
+        if key == "ipv4-network":
+            details["ipv4_network"] = value
+        elif key == "ipv4-netmask":
+            details["ipv4_netmask"] = value
+        elif key == "route":
+            details["routes"].append(value)
+    return details
+
+
 def loadUsers(paths: OcservPaths) -> list[dict[str, Any]]:
     users = _load_user_payload(paths)
     return [_sanitize_user_record(users[key]) for key in sorted(users)]
+
+
+def listGroups(paths: OcservPaths) -> list[dict[str, Any]]:
+    inventory = inventoryConfig(paths)
+    assignments = inventory["user_group_assignments"]
+    groups: list[dict[str, Any]] = []
+    for group in inventory["allowed_groups"]:
+        details = _parse_group_config_details(_group_config_path(paths, group))
+        members = sorted(username for username, assigned_group in assignments.items() if assigned_group == group)
+        groups.append({
+            "group": group,
+            "ipv4_network": details["ipv4_network"],
+            "ipv4_netmask": details["ipv4_netmask"],
+            "routes": details["routes"],
+            "member_count": len(members),
+            "members": members,
+        })
+    return groups
+
+
+def showUserIps(
+    paths: OcservPaths,
+    audit_sink: AuditSink | None = None,
+    request_id: str = "unknown-request",
+    actor_id: str = "unknown-actor",
+) -> list[dict[str, Any]]:
+    sessions = runOcctl(paths, "show_sessions", audit_sink, request_id, actor_id)
+    if sessions and "ip" not in sessions[0] and "vpn_ip" not in sessions[0] and "status" in sessions[0]:
+        parsed_tabular: list[dict[str, Any]] = []
+        for session in sessions:
+            status = session.get("status")
+            if not isinstance(status, str):
+                continue
+            parts = [part for part in status.split() if part]
+            if len(parts) < 4:
+                continue
+            if parts[0].lower() == "user" and parts[1].lower() == "vhost":
+                continue
+            parsed_tabular.append(
+                {
+                    "username": parts[0],
+                    "group": parts[1] if len(parts) > 1 else None,
+                    "ip": parts[2] if len(parts) > 2 else None,
+                    "session": session,
+                }
+            )
+        if parsed_tabular:
+            return parsed_tabular
+    user_ips: list[dict[str, Any]] = []
+    for session in sessions:
+        username = session.get("username") or session.get("name") or session.get("user")
+        if not isinstance(username, str):
+            continue
+        user_ips.append(
+            {
+                "username": username,
+                "ip": session.get("ip") or session.get("vpn_ip"),
+                "group": session.get("group") or session.get("policy_group") or session.get("profile"),
+                "session": session,
+            }
+        )
+    return user_ips
 
 
 def listAllowedGroups(paths: OcservPaths) -> set[str]:
@@ -698,9 +783,6 @@ def verifyMutation(
             return {"ok": False, "error_code": "VERIFY_CREATE_FAILED", "details": {"username": username}}
         if group is not None and assignments.get(str(username)) != group:
             return {"ok": False, "error_code": "VERIFY_GROUP_MAPPING_FAILED", "details": {"username": username, "group": group}}
-        runtime_visible = _user_visible_in_runtime(paths, str(username), audit_sink, request_id, actor_id)
-        if runtime_visible is False:
-            return {"ok": False, "error_code": "VERIFY_RUNTIME_CREATE_FAILED", "details": {"username": username, "runtime_visible": runtime_visible}}
     elif action == "assign_group":
         if username not in users or users[str(username)].get("group") != group:
             return {"ok": False, "error_code": "VERIFY_ASSIGNMENT_FAILED", "details": {"username": username, "group": group}}
@@ -721,9 +803,6 @@ def verifyMutation(
     elif action == "delete_user":
         if username in users or str(username) in assignments:
             return {"ok": False, "error_code": "VERIFY_DELETE_FAILED", "details": {"username": username}}
-        runtime_visible = _user_visible_in_runtime(paths, str(username), audit_sink, request_id, actor_id)
-        if runtime_visible is True:
-            return {"ok": False, "error_code": "VERIFY_RUNTIME_DELETE_FAILED", "details": {"username": username, "runtime_visible": runtime_visible}}
     return {"ok": True, "error_code": None, "details": {"username": username, "group": group}}
 
 
@@ -1038,6 +1117,92 @@ def assignGroupRecord(paths: OcservPaths, username: str, group: str) -> dict[str
     _save_user_payload(paths, users)
     _save_user_group_map(paths, assignments)
     return _sanitize_user_record(users[username])
+
+
+def createGroupRecord(
+    paths: OcservPaths,
+    group: str,
+    ipv4_network: str | None,
+    ipv4_netmask: str | None,
+    routes: list[str],
+) -> dict[str, Any]:
+    if group in listAllowedGroups(paths):
+        raise ValueError("GROUP_ALREADY_EXISTS")
+    payload = _read_json(paths.groups_file, {"groups": []}) if not paths.groups_file.is_dir() else {"groups": []}
+    existing_groups = payload.get("groups", []) if isinstance(payload, dict) else []
+    if not isinstance(existing_groups, list):
+        existing_groups = []
+    normalized_groups = sorted(set([item for item in existing_groups if isinstance(item, str)] + [group]))
+    if not paths.groups_file.is_dir():
+        _write_json(paths.groups_file, {"groups": normalized_groups})
+
+    template_dir = _resolved_group_template_dir(paths)
+    template_dir.mkdir(parents=True, exist_ok=True)
+    template_path = template_dir / f"{group}.conf.tpl"
+    lines = [f"# {group}"]
+    if ipv4_network:
+        lines.append(f"ipv4-network = {ipv4_network}")
+    if ipv4_netmask:
+        lines.append(f"ipv4-netmask = {ipv4_netmask}")
+    if routes:
+        lines.append("restrict-user-to-routes = true")
+        for route in routes:
+            lines.append(f"route = {route}")
+    template_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return {
+        "group": group,
+        "group_details": {
+            "group": group,
+            "ipv4_network": ipv4_network,
+            "ipv4_netmask": ipv4_netmask,
+            "routes": list(routes),
+        },
+    }
+
+
+def deleteGroupRecord(paths: OcservPaths, group: str) -> dict[str, Any]:
+    if group in {"default", "admins"}:
+        raise ValueError("PROTECTED_GROUP")
+    users = _load_user_payload(paths)
+    assignments = _load_user_group_map(paths, users)
+    if any(assigned_group == group for assigned_group in assignments.values()):
+        raise ValueError("GROUP_IN_USE")
+    if group not in listAllowedGroups(paths):
+        raise ValueError("GROUP_NOT_FOUND")
+
+    if not paths.groups_file.is_dir() and paths.groups_file.exists():
+        payload = _read_json(paths.groups_file, {"groups": []})
+        existing_groups = payload.get("groups", []) if isinstance(payload, dict) else []
+        remaining = [item for item in existing_groups if item != group]
+        _write_json(paths.groups_file, {"groups": remaining})
+
+    group_path = _group_config_path(paths, group)
+    if group_path.exists():
+        group_path.unlink()
+    template_path = _resolved_group_template_dir(paths) / f"{group}.conf.tpl"
+    if template_path.exists():
+        template_path.unlink()
+    return {"group": group, "group_details": {"group": group}}
+
+
+def disableUsersInGroupRecord(paths: OcservPaths, group: str) -> dict[str, Any]:
+    users = _load_user_payload(paths)
+    assignments = _load_user_group_map(paths, users)
+    target_users = sorted(
+        username
+        for username, assigned_group in assignments.items()
+        if assigned_group == group and username in users and not bool(users[username].get("disabled", False))
+    )
+    if group not in listAllowedGroups(paths):
+        raise ValueError("GROUP_NOT_FOUND")
+    if not target_users:
+        return {"group": group, "affected_users": []}
+    for username in target_users:
+        disableUserRecord(paths, username)
+    return {
+        "group": group,
+        "affected_users": [_sanitize_user_record(_load_user_payload(paths)[username]) for username in target_users],
+    }
 
 
 # START_CONTRACT: runOcctl

@@ -29,8 +29,8 @@ from wsgiref.simple_server import make_server
 
 from src.audit_log import AuditSink, recordAuditEvent
 from src.confirmation_state import InMemoryConfirmationStore, PendingConfirmationRequest, createPendingConfirmation, resolvePendingConfirmation
-from src.ocserv_adapter import OcservPaths, healthCheck, loadUsers, rollbackLastChange, safeReload, serializeCommandResult, validateConfig
-from src.policy_group_manager import assignGroup
+from src.ocserv_adapter import OcservPaths, healthCheck, loadUsers, rollbackLastChange, safeReload, serializeCommandResult, validateConfig, listGroups, showUserIps
+from src.policy_group_manager import assignGroup, createGroup, deleteGroup, disableUsersInGroup
 from src.safety_controls import InMemoryRateLimiter, OperatorIdentity, ProposedAdminAction, checkRateLimit, guardAction
 from src.session_manager import disconnectSessionForUser, listSessions
 from src.user_lifecycle_manager import createUser, disableUser, removeUser
@@ -86,9 +86,12 @@ def _extract_bearer_token(environ: dict[str, Any]) -> str | None:
 def validateRequest(action: str, payload: dict[str, Any]) -> dict[str, Any]:
     required_fields = {
         "create_user": ("username",),
+        "create_group": ("group",),
         "disconnect_session": ("username",),
         "disable_user": ("username",),
+        "disable_group_users": ("group",),
         "delete_user": ("username",),
+        "delete_group": ("group",),
         "assign_group": ("username", "group"),
         "rollback_last_change": (),
         "confirm_action": ("token", "decision"),
@@ -99,6 +102,8 @@ def validateRequest(action: str, payload: dict[str, Any]) -> dict[str, Any]:
             raise ValueError(f"INVALID_REQUEST:{','.join(missing)}")
     if action == "delete_user" and "force" in payload and not isinstance(payload["force"], bool):
         raise ValueError("INVALID_REQUEST:force")
+    if "routes" in payload and (not isinstance(payload["routes"], list) or any(not isinstance(route, str) or not route for route in payload["routes"])):
+        raise ValueError("INVALID_REQUEST:routes")
     if action != "confirm_action" and "confirmed" in payload:
         raise ValueError("INVALID_REQUEST:confirmed")
     if "confirmation_actor_id" in payload and not isinstance(payload["confirmation_actor_id"], str):
@@ -119,28 +124,47 @@ def executeApprovedAction(
     request_id = payload.get("request_id") or uuid4().hex
     audit_sink = AuditSink(config.paths.audit_log_file)
     validated_payload = validateRequest(action, payload)
+    target_username = validated_payload.get("username")
+    target_group = validated_payload.get("group")
+
     proposed = ProposedAdminAction(
         action=action,
-        username=validated_payload.get("username"),
-        group=validated_payload.get("group"),
+        username=target_username if isinstance(target_username, str) else None,
+        group=target_group,
         confirmed=confirmed_from_token,
         request_id=request_id,
     )
     decision = guardAction(proposed, actor, config.allowed_actors, audit_sink)
     if not decision.allowed:
         if decision.requires_confirmation:
+            confirmation_summary = _build_confirmation_summary(action, validated_payload)
             pending = createPendingConfirmation(
                 store,
                 PendingConfirmationRequest(
                     action=action,
                     actor_id=str(validated_payload.get("confirmation_actor_id") or actor.actor_id),
-                    target_user=proposed.username or action,
+                    target_user=proposed.username or (proposed.group if proposed.group is not None else action),
+                    target_group=proposed.group,
+                    summary=confirmation_summary,
                     request_id=request_id,
                     payload=dict(validated_payload),
                 ),
                 audit_sink,
             )
-            return {"ok": False, "error_code": decision.error_code, "token": pending.token, "status": "pending_confirmation"}
+            return {
+                "ok": False,
+                "error_code": decision.error_code,
+                "token": pending.token,
+                "status": "pending_confirmation",
+                "confirmation": {
+                    "token": pending.token,
+                    "action": pending.action,
+                    "target_user": pending.target_user,
+                    "target_group": pending.target_group,
+                    "summary": pending.summary,
+                    "expires_at": pending.expires_at.isoformat(),
+                },
+            }
         return {"ok": False, "error_code": decision.error_code, "status": "rejected"}
 
     if action == "list_users":
@@ -160,15 +184,34 @@ def executeApprovedAction(
         return {"ok": True, "users": users}
     if action == "list_sessions":
         return {"ok": True, "sessions": listSessions(config.paths, audit_sink, request_id, actor.actor_id)}
+    if action == "list_groups":
+        return {"ok": True, "groups": listGroups(config.paths)}
+    if action == "show_user_ips":
+        return {"ok": True, "user_ips": showUserIps(config.paths, audit_sink, request_id, actor.actor_id)}
     if action == "disconnect_session":
         disconnected = disconnectSessionForUser(config.paths, str(validated_payload["username"]), audit_sink, request_id, actor.actor_id)
         return {"ok": True, **disconnected}
     if action == "create_user":
         created = createUser(config.paths, str(validated_payload["username"]), validated_payload.get("group"), decision, audit_sink, request_id, actor.actor_id)
         return {"ok": True, **created}
+    if action == "create_group":
+        created_group = createGroup(
+            config.paths,
+            str(validated_payload["group"]),
+            validated_payload.get("ipv4_network"),
+            validated_payload.get("ipv4_netmask"),
+            validated_payload.get("routes") or [],
+            audit_sink,
+            request_id,
+            actor.actor_id,
+        )
+        return {"ok": True, **created_group}
     if action == "disable_user":
         disabled = disableUser(config.paths, str(validated_payload["username"]), decision, audit_sink, request_id, actor.actor_id)
         return {"ok": True, **disabled}
+    if action == "disable_group_users":
+        disabled_group_users = disableUsersInGroup(config.paths, str(validated_payload["group"]), decision, audit_sink, request_id, actor.actor_id)
+        return {"ok": True, **disabled_group_users}
     if action == "delete_user":
         removed = removeUser(
             config.paths,
@@ -180,6 +223,9 @@ def executeApprovedAction(
             force=bool(validated_payload.get("force", False)),
         )
         return {"ok": True, **removed}
+    if action == "delete_group":
+        deleted_group = deleteGroup(config.paths, str(validated_payload["group"]), decision, audit_sink, request_id, actor.actor_id)
+        return {"ok": True, **deleted_group}
     if action == "assign_group":
         updated = assignGroup(config.paths, str(validated_payload["username"]), str(validated_payload["group"]), audit_sink, request_id, actor.actor_id)
         return {"ok": True, **updated}
@@ -193,6 +239,16 @@ def executeApprovedAction(
     if action == "confirm_action":
         token = str(validated_payload["token"])
         pending = store.get(token)
+        if pending is not None:
+            expected_action = _normalize_expected_confirmation_value(validated_payload.get("expected_action"))
+            expected_username = _normalize_expected_confirmation_value(validated_payload.get("expected_username"))
+            expected_group = _normalize_expected_confirmation_value(validated_payload.get("expected_group"))
+            if expected_action is not None and expected_action != pending.action:
+                return {"ok": False, "error_code": "INVALID_CONFIRMATION_CONTEXT", "confirmation": _serialize_pending_confirmation(pending)}
+            if expected_username is not None and expected_username != pending.target_user:
+                return {"ok": False, "error_code": "INVALID_CONFIRMATION_CONTEXT", "confirmation": _serialize_pending_confirmation(pending)}
+            if pending.target_group is not None and expected_group is not None and expected_group != pending.target_group:
+                return {"ok": False, "error_code": "INVALID_CONFIRMATION_CONTEXT", "confirmation": _serialize_pending_confirmation(pending)}
         resolution = resolvePendingConfirmation(
             store,
             token,
@@ -204,11 +260,12 @@ def executeApprovedAction(
             resumed_payload = dict(pending.payload)
             resumed_payload["request_id"] = pending.request_id
             executed = executeApprovedAction(pending.action, resumed_payload, actor, config, store, confirmed_from_token=True)
-            return {"ok": True, "resolution": asdict(resolution), "executed": executed}
+            return {"ok": True, "resolution": asdict(resolution), "confirmation": _serialize_pending_confirmation(pending), "executed": executed}
         return {
             "ok": resolution.execute_allowed,
             "error_code": resolution.error_code,
             "resolution": asdict(resolution),
+            "confirmation": _serialize_pending_confirmation(pending) if pending is not None else None,
         }
     raise ValueError("ACTION_NOT_ALLOWED")
     # END_BLOCK_EXECUTE_APPROVED_ACTION
@@ -233,6 +290,46 @@ def _serialize_reload_result(result: dict[str, Any]) -> dict[str, Any]:
         "activation_mode": result.get("activation_mode"),
         "restart_required": result.get("restart_required"),
     }
+
+
+def _serialize_pending_confirmation(pending: PendingConfirmationRequest | Any) -> dict[str, Any]:
+    return {
+        "token": pending.token,
+        "action": pending.action,
+        "target_user": pending.target_user,
+        "target_group": getattr(pending, "target_group", None),
+        "summary": getattr(pending, "summary", None),
+        "expires_at": pending.expires_at.isoformat(),
+    }
+
+
+def _build_confirmation_summary(action: str, payload: dict[str, Any]) -> str:
+    username = payload.get("username")
+    group = payload.get("group")
+    if action == "disable_group_users" and group:
+        return f"Disable all users in group {group}"
+    if action == "delete_group" and group:
+        return f"Delete group {group}"
+    if action == "create_group" and group:
+        return f"Create group {group}"
+    if username and group:
+        return f"{action} for user {username} in group {group}"
+    if username:
+        return f"{action} for user {username}"
+    if group:
+        return f"{action} for group {group}"
+    return action
+
+
+def _normalize_expected_confirmation_value(value: Any) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        return str(value)
+    normalized = value.strip()
+    if normalized.lower() in {"", "-", "null", "none"}:
+        return None
+    return normalized
 
 
 def build_app(config: AdminApiConfig) -> Callable[[dict[str, Any], Callable[..., Any]], list[bytes]]:
@@ -310,6 +407,7 @@ def build_config_from_env(runtime_root: Path | None = None) -> AdminApiConfig:
         group_config_dir=Path(os.environ.get("OCSERV_ADMIN_GROUP_CONFIG_DIR", str(DEFAULT_GROUP_CONFIG_DIR if runtime_root is None else runtime / "groups.d"))),
         group_template_dir=Path(os.environ.get("OCSERV_ADMIN_GROUP_TEMPLATE_DIR", str(DEFAULT_GROUP_TEMPLATE_DIR if runtime_root is None else runtime / "group-templates"))),
         user_group_map_file=Path(os.environ.get("OCSERV_ADMIN_USER_GROUP_MAP_FILE", str(DEFAULT_USER_GROUP_MAP_FILE if runtime_root is None else runtime / "user-groups.json"))),
+        rollback_state_file=Path(os.environ.get("OCSERV_ADMIN_ROLLBACK_STATE_FILE", str(runtime / "last-rollback.json"))),
     )
     if not paths.groups_file.exists() and paths.groups_file.suffix == ".json":
         paths.groups_file.parent.mkdir(parents=True, exist_ok=True)

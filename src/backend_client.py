@@ -39,11 +39,16 @@ BACKEND_UNAVAILABLE_ERROR = "BACKEND_UNAVAILABLE"
 ALLOWED_BACKEND_ACTIONS = {
     "list_users",
     "list_sessions",
+    "list_groups",
+    "show_user_ips",
     "disconnect_session",
     "create_user",
     "disable_user",
+    "disable_group_users",
     "delete_user",
     "assign_group",
+    "create_group",
+    "delete_group",
     "reload_service",
     "rollback_last_change",
     "validate_config",
@@ -53,11 +58,16 @@ ALLOWED_BACKEND_ACTIONS = {
 EXPOSED_PUBLIC_TOOLS = (
     "list_users",
     "list_sessions",
+    "list_groups",
+    "show_user_ips",
     "disconnect_session",
     "create_user",
     "disable_user",
+    "disable_group_users",
     "delete_user",
     "assign_group",
+    "create_group",
+    "delete_group",
     "reload_service",
     "rollback_last_change",
     "confirm_action",
@@ -66,23 +76,31 @@ EXPOSED_PUBLIC_TOOLS = (
 ACTION_FIELDS: dict[str, tuple[str, ...]] = {
     "list_users": (),
     "list_sessions": (),
+    "list_groups": (),
+    "show_user_ips": (),
     "disconnect_session": ("username",),
     "create_user": ("username", "group"),
     "disable_user": ("username",),
+    "disable_group_users": ("group",),
     "delete_user": ("username", "force"),
     "assign_group": ("username", "group"),
+    "create_group": ("group", "ipv4_network", "ipv4_netmask", "routes"),
+    "delete_group": ("group",),
     "reload_service": (),
     "rollback_last_change": (),
     "validate_config": (),
-    "confirm_action": ("token", "decision"),
+    "confirm_action": ("token", "decision", "expected_action", "expected_username", "expected_group"),
 }
 
 REQUIRED_ACTION_FIELDS: dict[str, tuple[str, ...]] = {
     "disconnect_session": ("username",),
     "create_user": ("username", "group"),
     "disable_user": ("username",),
+    "disable_group_users": ("group",),
     "delete_user": ("username",),
     "assign_group": ("username", "group"),
+    "create_group": ("group",),
+    "delete_group": ("group",),
     "rollback_last_change": (),
     "confirm_action": ("token", "decision"),
 }
@@ -125,6 +143,39 @@ TOOL_METADATA: dict[str, dict[str, Any]] = {
             "type": "object",
             "properties": {
                 **PAGINATION_PROPERTIES,
+                "response_format": RESPONSE_FORMAT_SCHEMA,
+            },
+            "additionalProperties": False,
+        },
+        "annotations": {
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "idempotentHint": True,
+            "openWorldHint": False,
+        },
+    },
+    "list_groups": {
+        "description": "List configured ocserv policy groups with network and membership details.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                **PAGINATION_PROPERTIES,
+                "response_format": RESPONSE_FORMAT_SCHEMA,
+            },
+            "additionalProperties": False,
+        },
+        "annotations": {
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "idempotentHint": True,
+            "openWorldHint": False,
+        },
+    },
+    "show_user_ips": {
+        "description": "Show current VPN IP information for active users based on live sessions.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
                 "response_format": RESPONSE_FORMAT_SCHEMA,
             },
             "additionalProperties": False,
@@ -191,6 +242,24 @@ TOOL_METADATA: dict[str, dict[str, Any]] = {
             "openWorldHint": False,
         },
     },
+    "disable_group_users": {
+        "description": "Disable all VPN users assigned to a policy group through the confirmation-token flow.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "group": {"type": "string", "minLength": 2, "maxLength": 32},
+                "response_format": RESPONSE_FORMAT_SCHEMA,
+            },
+            "required": ["group"],
+            "additionalProperties": False,
+        },
+        "annotations": {
+            "readOnlyHint": False,
+            "destructiveHint": True,
+            "idempotentHint": False,
+            "openWorldHint": False,
+        },
+    },
     "delete_user": {
         "description": "Delete a VPN user. Force removal still requires confirmation.",
         "inputSchema": {
@@ -220,6 +289,48 @@ TOOL_METADATA: dict[str, dict[str, Any]] = {
                 "response_format": RESPONSE_FORMAT_SCHEMA,
             },
             "required": ["username", "group"],
+            "additionalProperties": False,
+        },
+        "annotations": {
+            "readOnlyHint": False,
+            "destructiveHint": True,
+            "idempotentHint": False,
+            "openWorldHint": False,
+        },
+    },
+    "create_group": {
+        "description": "Create a managed ocserv policy group, optionally with IPv4 pool and routes.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "group": {"type": "string", "minLength": 2, "maxLength": 32},
+                "ipv4_network": {"type": "string", "minLength": 3, "maxLength": 64},
+                "ipv4_netmask": {"type": "string", "minLength": 3, "maxLength": 64},
+                "routes": {
+                    "type": "array",
+                    "items": {"type": "string", "minLength": 3, "maxLength": 128},
+                },
+                "response_format": RESPONSE_FORMAT_SCHEMA,
+            },
+            "required": ["group"],
+            "additionalProperties": False,
+        },
+        "annotations": {
+            "readOnlyHint": False,
+            "destructiveHint": False,
+            "idempotentHint": False,
+            "openWorldHint": False,
+        },
+    },
+    "delete_group": {
+        "description": "Delete a managed ocserv policy group when no users still belong to it.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "group": {"type": "string", "minLength": 2, "maxLength": 32},
+                "response_format": RESPONSE_FORMAT_SCHEMA,
+            },
+            "required": ["group"],
             "additionalProperties": False,
         },
         "annotations": {
@@ -264,6 +375,9 @@ TOOL_METADATA: dict[str, dict[str, Any]] = {
             "properties": {
                 "token": {"type": "string", "minLength": 1},
                 "decision": {"type": "string", "enum": ["confirm", "cancel"]},
+                "expected_action": {"type": "string", "minLength": 1, "maxLength": 64},
+                "expected_username": {"type": "string", "minLength": 1, "maxLength": 64},
+                "expected_group": {"type": "string", "minLength": 1, "maxLength": 64},
                 "response_format": RESPONSE_FORMAT_SCHEMA,
             },
             "required": ["token", "decision"],
@@ -363,7 +477,7 @@ def buildToolCatalogWithGroups(group_choices: tuple[str, ...] | None) -> list[di
     catalog: list[dict[str, Any]] = []
     for action in EXPOSED_PUBLIC_TOOLS:
         metadata = json.loads(json.dumps(TOOL_METADATA[action]))
-        if group_choices and action in {"create_user", "assign_group"}:
+        if group_choices and action in {"create_user", "assign_group", "disable_group_users", "create_group", "delete_group"}:
             metadata["inputSchema"]["properties"]["group"] = {
                 "type": "string",
                 "enum": list(group_choices),
@@ -394,12 +508,17 @@ def normalizeBackendResponse(action: str, response: dict[str, Any]) -> dict[str,
     entities = {
         "users": response.get("users"),
         "sessions": response.get("sessions"),
+        "groups": response.get("groups"),
+        "user_ips": response.get("user_ips"),
         "user": response.get("user"),
         "provisioning": response.get("provisioning") or (response.get("executed") or {}).get("provisioning"),
         "disconnect": response.get("disconnect") or (response.get("executed") or {}).get("disconnect"),
         "group": response.get("group") or (response.get("user") or {}).get("group"),
+        "group_details": response.get("group_details") or (response.get("executed") or {}).get("group_details"),
+        "affected_users": response.get("affected_users") or (response.get("executed") or {}).get("affected_users"),
         "token": response.get("token"),
         "resolution": response.get("resolution"),
+        "confirmation": response.get("confirmation") or (response.get("executed") or {}).get("confirmation"),
         "executed": response.get("executed"),
     }
 
@@ -442,10 +561,15 @@ def _actionable_message(error_code: str) -> str:
         "INVALID_USERNAME": "Provide a username that matches the ocserv-safe identifier format.",
         "INVALID_GROUP": "Provide an existing ocserv policy group identifier.",
         "GROUP_NOT_FOUND": "Choose one of the configured ocserv policy groups.",
+        "GROUP_ALREADY_EXISTS": "Choose a different group name because that policy group already exists.",
+        "GROUP_IN_USE": "Move or disable users in that group before deleting it.",
+        "PROTECTED_GROUP": "That built-in group cannot be deleted.",
         "INVALID_REQUEST:force": "The force flag must be a boolean value.",
+        "INVALID_REQUEST:routes": "Provide routes as an array of strings.",
         "INVALID_REQUEST:response_format": "Use response_format=json or response_format=markdown.",
         "INVALID_REQUEST:limit": "Provide limit as an integer between 1 and 100.",
         "INVALID_REQUEST:offset": "Provide offset as an integer greater than or equal to 0.",
+        "INVALID_CONFIRMATION_CONTEXT": "Retry confirmation with the exact action context or request a fresh destructive action preview.",
         BACKEND_UNAVAILABLE_ERROR: "Ensure the localhost ocserv-admin backend is running and reachable before retrying.",
     }
     return messages.get(error_code, "Review the backend response details and retry with an approved payload.")
@@ -464,6 +588,8 @@ def _next_step_for_status(status: str, error_code: str) -> str | None:
         return "Call confirm_action with the returned token and a confirm or cancel decision."
     if error_code == "GROUP_NOT_FOUND":
         return "Ask for an existing ocserv policy group before retrying."
+    if error_code == "GROUP_IN_USE":
+        return "List users in that group, reassign or disable them, and retry the delete request."
     if error_code == "UNAUTHORIZED_OPERATOR":
         return "Configure OCSERV_ADMIN_ALLOWED_ACTORS to include the client actor id."
     return None
@@ -497,6 +623,11 @@ def planAction(action: str, *, audit_sink: AuditSink | Path | None = None, actor
     for field in BOOLEAN_FIELDS:
         if field in payload and not isinstance(payload[field], bool):
             raise ValueError(f"INVALID_REQUEST:{field}")
+
+    if "routes" in payload:
+        routes = payload["routes"]
+        if not isinstance(routes, list) or any(not isinstance(route, str) or not route for route in routes):
+            raise ValueError("INVALID_REQUEST:routes")
 
     if action == "confirm_action" and payload.get("decision") not in DECISION_VALUES:
         raise ValueError("INVALID_REQUEST:decision")

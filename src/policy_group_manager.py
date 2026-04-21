@@ -17,7 +17,17 @@
 from __future__ import annotations
 
 from src.audit_log import AuditSink, recordAuditEvent
-from src.ocserv_adapter import OcservPaths, applyManagedMutation, assignGroupRecord, inventoryConfig, preflightMutation, serializeActivationResult
+from src.ocserv_adapter import (
+    OcservPaths,
+    applyManagedMutation,
+    assignGroupRecord,
+    createGroupRecord,
+    deleteGroupRecord,
+    disableUsersInGroupRecord,
+    inventoryConfig,
+    preflightMutation,
+    serializeActivationResult,
+)
 
 
 def renderPolicyChanges(paths: OcservPaths, target_user: str, target_group: str) -> dict[str, object]:
@@ -90,3 +100,84 @@ def assignGroup(
         "rolled_back": applied["rolled_back"],
         "change_set": change_set,
     }
+
+
+def createGroup(
+    paths: OcservPaths,
+    target_group: str,
+    ipv4_network: str | None,
+    ipv4_netmask: str | None,
+    routes: list[str],
+    audit_sink: AuditSink | None,
+    request_id: str,
+    actor_id: str,
+) -> dict[str, object]:
+    created = createGroupRecord(paths, target_group, ipv4_network, ipv4_netmask, routes)
+    recordAuditEvent(
+        {
+            "event": "group_created",
+            "request_id": request_id,
+            "actor_id": actor_id,
+            "command": "create_group",
+            "target_group": target_group,
+            "result": "ok",
+            "message": "[PolicyGroupManager][createGroup][BLOCK_RENDER_POLICY_CHANGES] created group",
+            "details": created["group_details"],
+        },
+        audit_sink,
+    )
+    return created
+
+
+def deleteGroup(
+    paths: OcservPaths,
+    target_group: str,
+    guard_decision,
+    audit_sink: AuditSink | None,
+    request_id: str,
+    actor_id: str,
+) -> dict[str, object]:
+    if not guard_decision.allowed:
+        raise PermissionError(guard_decision.error_code or "ACTION_NOT_ALLOWED")
+    deleted = deleteGroupRecord(paths, target_group)
+    recordAuditEvent(
+        {
+            "event": "group_deleted",
+            "request_id": request_id,
+            "actor_id": actor_id,
+            "command": "delete_group",
+            "target_group": target_group,
+            "result": "ok",
+            "message": "[PolicyGroupManager][deleteGroup][BLOCK_RENDER_POLICY_CHANGES] deleted group",
+            "details": deleted["group_details"],
+        },
+        audit_sink,
+    )
+    return deleted
+
+
+def disableUsersInGroup(
+    paths: OcservPaths,
+    target_group: str,
+    guard_decision,
+    audit_sink: AuditSink | None,
+    request_id: str,
+    actor_id: str,
+) -> dict[str, object]:
+    if not guard_decision.allowed:
+        raise PermissionError(guard_decision.error_code or "ACTION_NOT_ALLOWED")
+    disabled = disableUsersInGroupRecord(paths, target_group)
+    recordAuditEvent(
+        {
+            "event": "group_users_disabled",
+            "request_id": request_id,
+            "actor_id": actor_id,
+            "command": "disable_group_users",
+            "target_group": target_group,
+            "result": "ok",
+            "message": "[PolicyGroupManager][disableUsersInGroup][BLOCK_RENDER_POLICY_CHANGES] disabled users in group",
+            "details": {"count": len(disabled["affected_users"])},
+        },
+        audit_sink,
+    )
+    return disabled

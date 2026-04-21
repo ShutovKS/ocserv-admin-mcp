@@ -35,6 +35,8 @@ class PendingConfirmationRequest:
     target_user: str
     request_id: str
     expires_in_seconds: int = 300
+    target_group: str | None = None
+    summary: str | None = None
     payload: dict[str, Any] = field(default_factory=dict)
 
 
@@ -44,6 +46,8 @@ class PendingConfirmation:
     action: str
     actor_id: str
     target_user: str
+    target_group: str | None
+    summary: str | None
     request_id: str
     status: str
     expires_at: datetime
@@ -56,6 +60,9 @@ class ConfirmationResolution:
     status: str
     execute_allowed: bool
     error_code: str | None = None
+    action: str | None = None
+    target_user: str | None = None
+    target_group: str | None = None
 
 
 class InMemoryConfirmationStore:
@@ -89,6 +96,8 @@ def createPendingConfirmation(
         action=request.action,
         actor_id=request.actor_id,
         target_user=request.target_user,
+        target_group=request.target_group,
+        summary=request.summary,
         request_id=request.request_id,
         status="pending",
         expires_at=current_time + timedelta(seconds=request.expires_in_seconds),
@@ -104,7 +113,7 @@ def createPendingConfirmation(
             "target_user": request.target_user,
             "result": "pending",
             "message": "[ConfirmationState][createPendingConfirmation][BLOCK_CREATE_PENDING_CONFIRMATION] created pending confirmation",
-            "details": {"expires_at": pending.expires_at.isoformat()},
+            "details": {"expires_at": pending.expires_at.isoformat(), "target_group": pending.target_group, "summary": pending.summary},
         },
         audit_sink,
     )
@@ -133,18 +142,18 @@ def resolvePendingConfirmation(
     if record is None:
         resolution = ConfirmationResolution(token, "missing", False, "CONFIRMATION_NOT_FOUND")
     elif record.status != "pending":
-        resolution = ConfirmationResolution(token, "replayed", False, "CONFIRMATION_REPLAYED")
+        resolution = ConfirmationResolution(token, "replayed", False, "CONFIRMATION_REPLAYED", action=record.action, target_user=record.target_user, target_group=record.target_group)
     elif current_time > record.expires_at:
         record.status = "expired"
-        resolution = ConfirmationResolution(token, "expired", False, "CONFIRMATION_EXPIRED")
+        resolution = ConfirmationResolution(token, "expired", False, "CONFIRMATION_EXPIRED", action=record.action, target_user=record.target_user, target_group=record.target_group)
     elif requested_actor_id is not None and record.actor_id != requested_actor_id:
-        resolution = ConfirmationResolution(token, "rejected", False, "UNAUTHORIZED_OPERATOR")
+        resolution = ConfirmationResolution(token, "rejected", False, "UNAUTHORIZED_OPERATOR", action=record.action, target_user=record.target_user, target_group=record.target_group)
     elif decision == "cancel":
         record.status = "cancelled"
-        resolution = ConfirmationResolution(token, "cancelled", False)
+        resolution = ConfirmationResolution(token, "cancelled", False, action=record.action, target_user=record.target_user, target_group=record.target_group)
     else:
         record.status = "confirmed"
-        resolution = ConfirmationResolution(token, "confirmed", True)
+        resolution = ConfirmationResolution(token, "confirmed", True, action=record.action, target_user=record.target_user, target_group=record.target_group)
 
     recordAuditEvent(
         {
@@ -156,7 +165,7 @@ def resolvePendingConfirmation(
             "result": resolution.status,
             "error_code": resolution.error_code,
             "message": "[ConfirmationState][resolvePendingConfirmation][BLOCK_RESOLVE_PENDING_CONFIRMATION] resolved confirmation",
-            "details": {"decision": decision, "requested_actor_id": requested_actor_id},
+            "details": {"decision": decision, "requested_actor_id": requested_actor_id, "target_group": record.target_group if record else None, "summary": record.summary if record else None},
         },
         audit_sink,
     )
