@@ -48,6 +48,26 @@ class OcservAdapterTests(unittest.TestCase):
             self.assertIn("default", inventory["allowed_groups"])
             self.assertEqual(inventory["user_group_assignments"]["alice"], "default")
 
+    def test_create_user_with_static_ip_persists_and_renders_per_user_config(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            paths = self._make_paths(temp_dir)
+            (Path(temp_dir) / "group-templates" / "default.conf.tpl").parent.mkdir(parents=True, exist_ok=True)
+            (Path(temp_dir) / "group-templates" / "default.conf.tpl").write_text(
+                "# default\nipv4-network = 10.10.0.0/24\nipv4-netmask = 255.255.255.0\n",
+                encoding="utf-8",
+            )
+            created = createUserRecord(paths, "alice", "default", "10.10.0.10")
+
+            self.assertEqual(created["user"]["ipv4_address"], "10.10.0.10")
+            payload = json.loads(paths.users_file.read_text(encoding="utf-8"))
+            self.assertEqual(payload["users"][0]["ipv4_address"], "10.10.0.10")
+            metadata = json.loads((Path(temp_dir) / "user-groups.json").read_text(encoding="utf-8"))
+            self.assertEqual(metadata["ipv4_addresses"]["alice"], "10.10.0.10")
+            self.assertEqual(
+                (Path(temp_dir) / "config-per-user" / "alice").read_text(encoding="utf-8"),
+                "explicit-ipv4 = 10.10.0.10\n",
+            )
+
     def test_preflight_declares_template_writes(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             paths = self._make_paths(temp_dir)
@@ -56,6 +76,18 @@ class OcservAdapterTests(unittest.TestCase):
             self.assertIn(str(Path(temp_dir) / "templates" / "ocserv.conf.tpl"), result["planned_files"])
             self.assertIn(str(Path(temp_dir) / "group-templates" / "default.conf.tpl"), result["planned_files"])
             self.assertFalse((Path(temp_dir) / "groups.d").exists())
+
+    def test_preflight_declares_user_config_write_for_static_ip(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            paths = self._make_paths(temp_dir)
+            (Path(temp_dir) / "group-templates" / "default.conf.tpl").parent.mkdir(parents=True, exist_ok=True)
+            (Path(temp_dir) / "group-templates" / "default.conf.tpl").write_text(
+                "# default\nipv4-network = 10.10.0.0/24\nipv4-netmask = 255.255.255.0\n",
+                encoding="utf-8",
+            )
+            result = preflightMutation(paths, "create_user", username="alice", group="default", ipv4_address="10.10.0.10")
+            self.assertTrue(result["ok"])
+            self.assertIn(str(Path(temp_dir) / "config-per-user" / "alice"), result["planned_files"])
 
     def test_assign_group_updates_user_store_and_mapping(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -72,6 +104,30 @@ class OcservAdapterTests(unittest.TestCase):
             paths = self._make_paths(temp_dir)
             with self.assertRaisesRegex(ValueError, "GROUP_NOT_FOUND"):
                 createUserRecord(paths, "alice", "unknown")
+
+    def test_create_user_rejects_static_ip_outside_group_pool(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            paths = self._make_paths(temp_dir)
+            (Path(temp_dir) / "group-templates" / "default.conf.tpl").parent.mkdir(parents=True, exist_ok=True)
+            (Path(temp_dir) / "group-templates" / "default.conf.tpl").write_text(
+                "# default\nipv4-network = 10.10.0.0/24\nipv4-netmask = 255.255.255.0\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "IP_OUTSIDE_GROUP_POOL"):
+                createUserRecord(paths, "alice", "default", "10.20.0.10")
+
+    def test_update_user_ip_rejects_duplicate_address(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            paths = self._make_paths(temp_dir)
+            template_dir = Path(temp_dir) / "group-templates"
+            template_dir.mkdir(parents=True, exist_ok=True)
+            (template_dir / "default.conf.tpl").write_text(
+                "# default\nipv4-network = 10.10.0.0/24\nipv4-netmask = 255.255.255.0\n",
+                encoding="utf-8",
+            )
+            createUserRecord(paths, "alice", "default", "10.10.0.10")
+            with self.assertRaisesRegex(ValueError, "IP_ADDRESS_IN_USE"):
+                createUserRecord(paths, "bob", "default", "10.10.0.10")
 
     def test_create_user_plain_backend_returns_one_time_password(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -123,6 +179,32 @@ class OcservAdapterTests(unittest.TestCase):
             self.assertEqual(json.loads(paths.users_file.read_text(encoding="utf-8"))["users"], []) if paths.users_file.exists() else self.assertFalse(paths.users_file.exists())
             self.assertFalse((Path(temp_dir) / "templates" / "ocserv.conf.tpl").exists())
             self.assertFalse((Path(temp_dir) / "group-templates" / "default.conf.tpl").exists())
+
+    def test_apply_managed_mutation_rolls_back_static_ip_user_config(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            paths = self._make_paths(temp_dir)
+            template_dir = Path(temp_dir) / "group-templates"
+            template_dir.mkdir(parents=True, exist_ok=True)
+            (template_dir / "default.conf.tpl").write_text(
+                "# default\nipv4-network = 10.10.0.0/24\nipv4-netmask = 255.255.255.0\n",
+                encoding="utf-8",
+            )
+            with patch(
+                "src.ocserv_adapter._run_command",
+                side_effect=[
+                    SystemCommandResult(False, "", "bad config", 1),
+                ],
+            ):
+                result = applyManagedMutation(
+                    paths,
+                    "create_user",
+                    lambda: createUserRecord(paths, "alice", "default", "10.10.0.10"),
+                    username="alice",
+                    group="default",
+                    ipv4_address="10.10.0.10",
+                )
+            self.assertFalse(result["ok"])
+            self.assertFalse((Path(temp_dir) / "config-per-user" / "alice").exists())
 
     def test_disable_user_does_not_create_undeclared_templates(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

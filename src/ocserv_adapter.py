@@ -35,6 +35,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+import ipaddress
 from pathlib import Path
 import secrets
 from string import Template
@@ -59,6 +60,7 @@ class OcservPaths:
     main_config_template: Path | None = None
     group_config_dir: Path | None = None
     group_template_dir: Path | None = None
+    user_config_dir: Path | None = None
     user_group_map_file: Path | None = None
     healthcheck_command: tuple[str, ...] = ("systemctl", "is-active", "ocserv")
     rollback_state_file: Path | None = None
@@ -94,6 +96,10 @@ def _resolved_group_config_dir(paths: OcservPaths) -> Path:
 
 def _resolved_group_template_dir(paths: OcservPaths) -> Path:
     return paths.group_template_dir or (_managed_root(paths) / "group-templates")
+
+
+def _resolved_user_config_dir(paths: OcservPaths) -> Path:
+    return paths.user_config_dir or (_managed_root(paths) / "config-per-user")
 
 
 def _resolved_user_group_map_file(paths: OcservPaths) -> Path:
@@ -275,18 +281,58 @@ def _save_plain_user_payload(passwd_file: Path, users: dict[str, dict[str, Any]]
     passwd_file.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
 
 
+def _load_user_metadata(paths: OcservPaths) -> tuple[dict[str, str], dict[str, str]]:
+    map_file = _resolved_user_group_map_file(paths)
+    if not map_file.exists():
+        return {}, {}
+    payload = _read_json(map_file, {"assignments": {}, "ipv4_addresses": {}})
+    if not isinstance(payload, dict):
+        return {}, {}
+
+    raw_assignments = payload.get("assignments", payload)
+    assignments = {
+        str(username): str(group)
+        for username, group in raw_assignments.items()
+        if isinstance(raw_assignments, dict) and isinstance(username, str) and isinstance(group, str)
+    }
+    raw_ipv4_addresses = payload.get("ipv4_addresses", {})
+    ipv4_addresses = {
+        str(username): str(address)
+        for username, address in raw_ipv4_addresses.items()
+        if isinstance(raw_ipv4_addresses, dict) and isinstance(username, str) and isinstance(address, str) and address
+    }
+    return assignments, ipv4_addresses
+
+
+def _save_user_metadata(paths: OcservPaths, assignments: dict[str, str], ipv4_addresses: dict[str, str]) -> None:
+    payload = {
+        "assignments": {username: assignments[username] for username in sorted(assignments)},
+        "ipv4_addresses": {username: ipv4_addresses[username] for username in sorted(ipv4_addresses)},
+    }
+    _write_json(_resolved_user_group_map_file(paths), payload)
+
+
 def _load_user_payload(paths: OcservPaths) -> dict[str, dict[str, Any]]:
+    metadata_assignments, metadata_ipv4_addresses = _load_user_metadata(paths)
     if not _uses_json_user_store(paths.users_file):
-        return _load_plain_user_payload(paths.users_file)
+        users = _load_plain_user_payload(paths.users_file)
+        for username, address in metadata_ipv4_addresses.items():
+            if username in users:
+                users[username]["ipv4_address"] = address
+        return users
     payload = _read_json(paths.users_file, {"users": []})
     users: dict[str, dict[str, Any]] = {}
     for record in payload.get("users", []):
         username = record.get("username")
         if isinstance(username, str):
+            ipv4_address = record.get("ipv4_address")
+            if not isinstance(ipv4_address, str) or not ipv4_address:
+                ipv4_address = metadata_ipv4_addresses.get(username)
             users[username] = {
                 "username": username,
-                "group": record.get("group"),
+                "group": record.get("group") or metadata_assignments.get(username),
                 "disabled": bool(record.get("disabled", False)),
+                "ipv4_address": ipv4_address,
             }
     return users
 
@@ -299,11 +345,9 @@ def _save_user_payload(paths: OcservPaths, users: dict[str, dict[str, Any]]) -> 
 
 
 def _load_user_group_map(paths: OcservPaths, users: dict[str, dict[str, Any]] | None = None) -> dict[str, str]:
-    map_file = _resolved_user_group_map_file(paths)
-    if map_file.exists():
-        payload = _read_json(map_file, {"assignments": {}})
-        assignments = payload.get("assignments", payload)
-        return {str(username): str(group) for username, group in assignments.items() if isinstance(username, str) and isinstance(group, str)}
+    assignments, _ = _load_user_metadata(paths)
+    if assignments:
+        return assignments
     source_users = users or _load_user_payload(paths)
     return {
         username: str(record["group"])
@@ -313,16 +357,36 @@ def _load_user_group_map(paths: OcservPaths, users: dict[str, dict[str, Any]] | 
 
 
 def _save_user_group_map(paths: OcservPaths, assignments: dict[str, str]) -> None:
-    payload = {"assignments": {username: assignments[username] for username in sorted(assignments)}}
-    _write_json(_resolved_user_group_map_file(paths), payload)
+    _, ipv4_addresses = _load_user_metadata(paths)
+    _save_user_metadata(paths, assignments, ipv4_addresses)
+
+
+def _load_user_ipv4_map(paths: OcservPaths, users: dict[str, dict[str, Any]] | None = None) -> dict[str, str]:
+    _, ipv4_addresses = _load_user_metadata(paths)
+    if ipv4_addresses:
+        return ipv4_addresses
+    source_users = users or _load_user_payload(paths)
+    return {
+        username: str(record["ipv4_address"])
+        for username, record in source_users.items()
+        if isinstance(record.get("ipv4_address"), str) and record.get("ipv4_address")
+    }
+
+
+def _save_user_ipv4_map(paths: OcservPaths, ipv4_addresses: dict[str, str]) -> None:
+    assignments, _ = _load_user_metadata(paths)
+    _save_user_metadata(paths, assignments, ipv4_addresses)
 
 
 def _sanitize_user_record(record: dict[str, Any]) -> dict[str, Any]:
-    return {
+    sanitized = {
         "username": record["username"],
         "group": record.get("group"),
         "disabled": bool(record.get("disabled", False)),
     }
+    if record.get("ipv4_address"):
+        sanitized["ipv4_address"] = record["ipv4_address"]
+    return sanitized
 
 
 def _parse_group_config_details(path: Path) -> dict[str, Any]:
@@ -341,6 +405,23 @@ def _parse_group_config_details(path: Path) -> dict[str, Any]:
         elif key == "route":
             details["routes"].append(value)
     return details
+
+
+def _user_config_path(paths: OcservPaths, username: str) -> Path:
+    return _resolved_user_config_dir(paths) / username
+
+
+def _render_user_config(ipv4_address: str) -> str:
+    return f"explicit-ipv4 = {ipv4_address}\n"
+
+
+def _sync_user_config(paths: OcservPaths, username: str, ipv4_address: str | None) -> None:
+    config_path = _user_config_path(paths, username)
+    if ipv4_address:
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_path.write_text(_render_user_config(ipv4_address), encoding="utf-8")
+    elif config_path.exists():
+        config_path.unlink()
 
 
 def loadUsers(paths: OcservPaths) -> list[dict[str, Any]]:
@@ -443,6 +524,11 @@ def _render_managed_files(paths: OcservPaths) -> dict[Path, str]:
             },
             _default_group_template(group),
         )
+    for user in _load_user_payload(paths).values():
+        ipv4_address = user.get("ipv4_address")
+        username = user.get("username")
+        if isinstance(username, str) and isinstance(ipv4_address, str) and ipv4_address:
+            rendered[_user_config_path(paths, username)] = _render_user_config(ipv4_address)
     return rendered
 
 
@@ -450,7 +536,7 @@ def _template_paths(paths: OcservPaths) -> list[Path]:
     return [_resolved_main_template(paths), *[_resolved_group_template_dir(paths) / f"{group}.conf.tpl" for group in _planned_group_names(paths)]]
 
 
-def _planned_mutation_paths(paths: OcservPaths, action: str, group: str | None = None) -> list[Path]:
+def _planned_mutation_paths(paths: OcservPaths, action: str, group: str | None = None, username: str | None = None) -> list[Path]:
     planned: list[Path] = []
     if action in {"create_user", "assign_group"}:
         planned.extend([
@@ -462,8 +548,10 @@ def _planned_mutation_paths(paths: OcservPaths, action: str, group: str | None =
                 _resolved_group_template_dir(paths) / f"{group}.conf.tpl",
                 _group_config_path(paths, group),
             ])
+    if action in {"create_user", "update_user_ip", "delete_user"} and username is not None:
+        planned.append(_user_config_path(paths, username))
     planned.append(paths.users_file)
-    if action in {"create_user", "assign_group", "delete_user"}:
+    if action in {"create_user", "assign_group", "delete_user", "update_user_ip"}:
         planned.append(_resolved_user_group_map_file(paths))
     return sorted(set(planned))
 
@@ -507,11 +595,19 @@ def _inventory_conflicts(
 ) -> list[str]:
     conflicts: list[str] = []
     allowed_group_set = set(allowed_groups)
+    static_ips: dict[str, str] = {}
     for username, group in assignments.items():
         if username not in users:
             conflicts.append(f"missing_auth_user:{username}")
         if group not in allowed_group_set:
             conflicts.append(f"unknown_group_mapping:{username}:{group}")
+    for username, record in users.items():
+        ipv4_address = record.get("ipv4_address")
+        if not isinstance(ipv4_address, str) or not ipv4_address:
+            continue
+        if ipv4_address in static_ips.values():
+            conflicts.append(f"duplicate_user_ipv4:{ipv4_address}")
+        static_ips[username] = ipv4_address
 
     template_names = [_group_name_from_template(path) for path in _group_template_paths(paths)]
     if len(template_names) != len(set(template_names)):
@@ -536,7 +632,9 @@ def inventoryConfig(paths: OcservPaths) -> dict[str, Any]:
         "main_config_template": str(_resolved_main_template(paths)),
         "group_config_dir": str(_resolved_group_config_dir(paths)),
         "group_template_dir": str(_resolved_group_template_dir(paths)),
+        "user_config_dir": str(_resolved_user_config_dir(paths)),
         "group_config_files": sorted(str(path) for path in rendered_files if path.parent == _resolved_group_config_dir(paths)),
+        "user_config_files": sorted(str(path) for path in rendered_files if path.parent == _resolved_user_config_dir(paths)),
         "group_template_files": sorted(str(path) for path in _group_template_paths(paths)),
         "auth_store": str(paths.users_file),
         "auth_mechanism": "json" if _uses_json_user_store(paths.users_file) else "plain",
@@ -552,13 +650,73 @@ def _determine_activation_mode(paths: OcservPaths, changed_files: list[str]) -> 
     main_config_path = _resolved_main_config_file(paths)
     group_config_dir = _resolved_group_config_dir(paths)
     group_template_dir = _resolved_group_template_dir(paths)
+    user_config_dir = _resolved_user_config_dir(paths)
     for changed_file in changed_files:
         changed_path = Path(changed_file)
         if changed_path == main_config_path:
             return "restart"
         if changed_path.is_relative_to(group_config_dir) or changed_path.is_relative_to(group_template_dir):
             return "restart"
+        if changed_path.is_relative_to(user_config_dir):
+            return "restart"
     return "reload"
+
+
+def _group_ipv4_network(paths: OcservPaths, group: str | None) -> ipaddress.IPv4Network | None:
+    if group is None:
+        return None
+    group_config_path = _group_config_path(paths, group)
+    details = _parse_group_config_details(group_config_path)
+    if details.get("ipv4_network") is None:
+        template_path = _resolved_group_template_dir(paths) / f"{group}.conf.tpl"
+        details = _parse_group_config_details(template_path)
+    ipv4_network = details.get("ipv4_network")
+    ipv4_netmask = details.get("ipv4_netmask")
+    if not isinstance(ipv4_network, str) or not ipv4_network:
+        return None
+    try:
+        if "/" in ipv4_network:
+            network = ipaddress.ip_network(ipv4_network, strict=False)
+            return network if isinstance(network, ipaddress.IPv4Network) else None
+        if isinstance(ipv4_netmask, str) and ipv4_netmask:
+            network = ipaddress.ip_network(f"{ipv4_network}/{ipv4_netmask}", strict=False)
+            return network if isinstance(network, ipaddress.IPv4Network) else None
+    except ValueError:
+        return None
+    return None
+
+
+def _validate_user_ipv4_address(
+    paths: OcservPaths,
+    *,
+    username: str | None,
+    group: str | None,
+    ipv4_address: str | None,
+    users: dict[str, dict[str, Any]],
+) -> str | None:
+    if ipv4_address is None:
+        return None
+    try:
+        address = ipaddress.ip_address(ipv4_address)
+    except ValueError as error:
+        raise ValueError("INVALID_IPV4_ADDRESS") from error
+    if not isinstance(address, ipaddress.IPv4Address):
+        raise ValueError("INVALID_IPV4_ADDRESS")
+
+    for existing_username, record in users.items():
+        if existing_username == username:
+            continue
+        if record.get("ipv4_address") == ipv4_address:
+            raise ValueError("IP_ADDRESS_IN_USE")
+
+    network = _group_ipv4_network(paths, group)
+    if network is None:
+        raise ValueError("GROUP_IPV4_POOL_REQUIRED")
+    if address not in network:
+        raise ValueError("IP_OUTSIDE_GROUP_POOL")
+    if address == network.network_address or (network.num_addresses > 2 and address == network.broadcast_address):
+        raise ValueError("IP_OUTSIDE_GROUP_POOL")
+    return ipv4_address
 
 
 def _user_visible_in_runtime(paths: OcservPaths, username: str, audit_sink: AuditSink | None, request_id: str, actor_id: str) -> bool | None:
@@ -607,6 +765,7 @@ def preflightMutation(
     *,
     username: str | None = None,
     group: str | None = None,
+    ipv4_address: str | None = None,
     force: bool = False,
     audit_sink: AuditSink | None = None,
     request_id: str = "unknown-request",
@@ -614,7 +773,7 @@ def preflightMutation(
 ) -> dict[str, Any]:
     inventory = inventoryConfig(paths)
     users = _load_user_payload(paths)
-    planned_files = [str(path) for path in _planned_mutation_paths(paths, action, group)]
+    planned_files = [str(path) for path in _planned_mutation_paths(paths, action, group, username)]
     if inventory["conflicts"]:
         return {
             "ok": False,
@@ -644,6 +803,17 @@ def preflightMutation(
                 "data_files": [str(paths.users_file), str(_resolved_user_group_map_file(paths))],
                 "activation_mode": _determine_activation_mode(paths, planned_files),
             }
+        try:
+            _validate_user_ipv4_address(paths, username=username, group=group, ipv4_address=ipv4_address, users=users)
+        except ValueError as error:
+            return {
+                "ok": False,
+                "error_code": str(error),
+                "details": {"username": username, "group": group, "ipv4_address": ipv4_address},
+                "planned_files": planned_files,
+                "data_files": [str(paths.users_file), str(_resolved_user_group_map_file(paths))],
+                "activation_mode": _determine_activation_mode(paths, planned_files),
+            }
         data_files = [str(paths.users_file), str(_resolved_user_group_map_file(paths))]
     elif action == "assign_group":
         if username not in users:
@@ -660,6 +830,29 @@ def preflightMutation(
                 "ok": False,
                 "error_code": "GROUP_NOT_FOUND",
                 "details": {"group": group},
+                "planned_files": planned_files,
+                "data_files": [str(paths.users_file), str(_resolved_user_group_map_file(paths))],
+                "activation_mode": _determine_activation_mode(paths, planned_files),
+            }
+        data_files = [str(paths.users_file), str(_resolved_user_group_map_file(paths))]
+    elif action == "update_user_ip":
+        if username not in users:
+            return {
+                "ok": False,
+                "error_code": "USER_NOT_FOUND",
+                "details": {"username": username},
+                "planned_files": planned_files,
+                "data_files": [str(paths.users_file), str(_resolved_user_group_map_file(paths))],
+                "activation_mode": _determine_activation_mode(paths, planned_files),
+            }
+        resolved_group = users[str(username)].get("group")
+        try:
+            _validate_user_ipv4_address(paths, username=username, group=resolved_group if isinstance(resolved_group, str) else None, ipv4_address=ipv4_address, users=users)
+        except ValueError as error:
+            return {
+                "ok": False,
+                "error_code": str(error),
+                "details": {"username": username, "group": resolved_group, "ipv4_address": ipv4_address},
                 "planned_files": planned_files,
                 "data_files": [str(paths.users_file), str(_resolved_user_group_map_file(paths))],
                 "activation_mode": _determine_activation_mode(paths, planned_files),
@@ -729,6 +922,17 @@ def _restore_file_snapshots(snapshots: dict[str, dict[str, Any]]) -> None:
             file_path.unlink()
 
 
+def _detect_changed_files(paths: list[Path], snapshots: dict[str, dict[str, Any]]) -> list[str]:
+    changed_files: list[str] = []
+    for file_path in paths:
+        snapshot = snapshots[str(file_path)]
+        exists_now = file_path.exists()
+        content_now = file_path.read_text(encoding="utf-8") if exists_now else None
+        if snapshot["exists"] != exists_now or snapshot["content"] != content_now:
+            changed_files.append(str(file_path))
+    return sorted(changed_files)
+
+
 def _store_rollback_state(
     paths: OcservPaths,
     *,
@@ -772,6 +976,7 @@ def verifyMutation(
     *,
     username: str | None = None,
     group: str | None = None,
+    ipv4_address: str | None = None,
     audit_sink: AuditSink | None = None,
     request_id: str = "unknown-request",
     actor_id: str = "unknown-actor",
@@ -783,6 +988,11 @@ def verifyMutation(
             return {"ok": False, "error_code": "VERIFY_CREATE_FAILED", "details": {"username": username}}
         if group is not None and assignments.get(str(username)) != group:
             return {"ok": False, "error_code": "VERIFY_GROUP_MAPPING_FAILED", "details": {"username": username, "group": group}}
+        if ipv4_address is not None:
+            if users[str(username)].get("ipv4_address") != ipv4_address:
+                return {"ok": False, "error_code": "VERIFY_USER_IPV4_FAILED", "details": {"username": username, "ipv4_address": ipv4_address}}
+            if not _user_config_path(paths, str(username)).exists():
+                return {"ok": False, "error_code": "VERIFY_USER_CONFIG_FAILED", "details": {"username": username}}
     elif action == "assign_group":
         if username not in users or users[str(username)].get("group") != group:
             return {"ok": False, "error_code": "VERIFY_ASSIGNMENT_FAILED", "details": {"username": username, "group": group}}
@@ -800,9 +1010,16 @@ def verifyMutation(
     elif action == "disable_user":
         if username not in users or not bool(users[str(username)].get("disabled", False)):
             return {"ok": False, "error_code": "VERIFY_DISABLE_FAILED", "details": {"username": username}}
+    elif action == "update_user_ip":
+        if username not in users or users[str(username)].get("ipv4_address") != ipv4_address:
+            return {"ok": False, "error_code": "VERIFY_USER_IPV4_FAILED", "details": {"username": username, "ipv4_address": ipv4_address}}
+        if not _user_config_path(paths, str(username)).exists():
+            return {"ok": False, "error_code": "VERIFY_USER_CONFIG_FAILED", "details": {"username": username}}
     elif action == "delete_user":
         if username in users or str(username) in assignments:
             return {"ok": False, "error_code": "VERIFY_DELETE_FAILED", "details": {"username": username}}
+        if username is not None and _user_config_path(paths, str(username)).exists():
+            return {"ok": False, "error_code": "VERIFY_USER_CONFIG_FAILED", "details": {"username": username}}
     return {"ok": True, "error_code": None, "details": {"username": username, "group": group}}
 
 
@@ -862,6 +1079,7 @@ def applyManagedMutation(
     *,
     username: str | None = None,
     group: str | None = None,
+    ipv4_address: str | None = None,
     force: bool = False,
     audit_sink: AuditSink | None = None,
     request_id: str = "unknown-request",
@@ -872,6 +1090,7 @@ def applyManagedMutation(
         action,
         username=username,
         group=group,
+        ipv4_address=ipv4_address,
         force=force,
         audit_sink=audit_sink,
         request_id=request_id,
@@ -896,7 +1115,7 @@ def applyManagedMutation(
     try:
         sync_result = _sync_managed_files(paths, action, group)
         mutated = mutate()
-        changed_files = sorted(set(sync_result["changed_files"]) | set(preflight["data_files"]))
+        changed_files = _detect_changed_files(snapshot_paths, snapshots)
         activation = activateService(paths, changed_files, audit_sink, request_id, actor_id)
         if not activation["ok"]:
             raise ValueError(activation["error_code"] or "SERVICE_RELOAD_FAILED")
@@ -905,6 +1124,7 @@ def applyManagedMutation(
             action,
             username=username,
             group=group,
+            ipv4_address=ipv4_address,
             audit_sink=audit_sink,
             request_id=request_id,
             actor_id=actor_id,
@@ -1039,13 +1259,15 @@ def rollbackLastChange(
     }
 
 
-def createUserRecord(paths: OcservPaths, username: str, group: str | None) -> dict[str, Any]:
+def createUserRecord(paths: OcservPaths, username: str, group: str | None, ipv4_address: str | None = None) -> dict[str, Any]:
     users = _load_user_payload(paths)
     assignments = _load_user_group_map(paths, users)
+    ipv4_addresses = _load_user_ipv4_map(paths, users)
     if username in users:
         raise ValueError("USER_ALREADY_EXISTS")
     if group is not None and group not in listAllowedGroups(paths):
         raise ValueError("GROUP_NOT_FOUND")
+    normalized_ipv4_address = _validate_user_ipv4_address(paths, username=username, group=group, ipv4_address=ipv4_address, users=users)
     if not _uses_json_user_store(paths.users_file):
         generated_password = secrets.token_urlsafe(18)
         command = _with_prefix(paths, (paths.ocpasswd_bin, "-c", str(paths.users_file), *(("-g", group) if group else ()), username))
@@ -1055,17 +1277,24 @@ def createUserRecord(paths: OcservPaths, username: str, group: str | None) -> di
         created_users = _load_user_payload(paths)
         if group is not None:
             assignments[username] = group
-            _save_user_group_map(paths, assignments)
+        if normalized_ipv4_address is not None:
+            ipv4_addresses[username] = normalized_ipv4_address
+        _save_user_metadata(paths, assignments, ipv4_addresses)
+        _sync_user_config(paths, username, normalized_ipv4_address)
+        created_users = _load_user_payload(paths)
         return {
             "user": _sanitize_user_record(created_users[username]),
             "provisioning": {"one_time_password": generated_password},
         }
 
-    users[username] = {"username": username, "group": group, "disabled": False}
+    users[username] = {"username": username, "group": group, "disabled": False, "ipv4_address": normalized_ipv4_address}
     if group is not None:
         assignments[username] = group
+    if normalized_ipv4_address is not None:
+        ipv4_addresses[username] = normalized_ipv4_address
     _save_user_payload(paths, users)
-    _save_user_group_map(paths, assignments)
+    _save_user_metadata(paths, assignments, ipv4_addresses)
+    _sync_user_config(paths, username, normalized_ipv4_address)
     return {"user": users[username], "provisioning": None}
 
 
@@ -1086,6 +1315,7 @@ def disableUserRecord(paths: OcservPaths, username: str) -> dict[str, Any]:
 def deleteUserRecord(paths: OcservPaths, username: str) -> dict[str, Any]:
     users = _load_user_payload(paths)
     assignments = _load_user_group_map(paths, users)
+    ipv4_addresses = _load_user_ipv4_map(paths, users)
     if username not in users:
         raise ValueError("USER_NOT_FOUND")
     if not _uses_json_user_store(paths.users_file):
@@ -1094,13 +1324,17 @@ def deleteUserRecord(paths: OcservPaths, username: str) -> dict[str, Any]:
         if not result.ok:
             raise ValueError("USER_DELETE_FAILED")
         assignments.pop(username, None)
-        _save_user_group_map(paths, assignments)
+        ipv4_addresses.pop(username, None)
+        _save_user_metadata(paths, assignments, ipv4_addresses)
+        _sync_user_config(paths, username, None)
         return removed
 
     removed = users.pop(username)
     assignments.pop(username, None)
+    ipv4_addresses.pop(username, None)
     _save_user_payload(paths, users)
-    _save_user_group_map(paths, assignments)
+    _save_user_metadata(paths, assignments, ipv4_addresses)
+    _sync_user_config(paths, username, None)
     return removed
 
 
@@ -1112,10 +1346,37 @@ def assignGroupRecord(paths: OcservPaths, username: str, group: str) -> dict[str
     assignments = _load_user_group_map(paths, users)
     if username not in users:
         raise ValueError("USER_NOT_FOUND")
+    _validate_user_ipv4_address(paths, username=username, group=group, ipv4_address=users[username].get("ipv4_address"), users=users)
     users[username]["group"] = group
     assignments[username] = group
     _save_user_payload(paths, users)
     _save_user_group_map(paths, assignments)
+    _sync_user_config(paths, username, users[username].get("ipv4_address"))
+    return _sanitize_user_record(users[username])
+
+
+def updateUserIpRecord(paths: OcservPaths, username: str, ipv4_address: str) -> dict[str, Any]:
+    users = _load_user_payload(paths)
+    assignments = _load_user_group_map(paths, users)
+    ipv4_addresses = _load_user_ipv4_map(paths, users)
+    if username not in users:
+        raise ValueError("USER_NOT_FOUND")
+    group = users[username].get("group")
+    normalized_ipv4_address = _validate_user_ipv4_address(
+        paths,
+        username=username,
+        group=group if isinstance(group, str) else None,
+        ipv4_address=ipv4_address,
+        users=users,
+    )
+    if normalized_ipv4_address is None:
+        raise ValueError("INVALID_IPV4_ADDRESS")
+    users[username]["ipv4_address"] = normalized_ipv4_address
+    ipv4_addresses[username] = normalized_ipv4_address
+    if _uses_json_user_store(paths.users_file):
+        _save_user_payload(paths, users)
+    _save_user_metadata(paths, assignments, ipv4_addresses)
+    _sync_user_config(paths, username, normalized_ipv4_address)
     return _sanitize_user_record(users[username])
 
 
