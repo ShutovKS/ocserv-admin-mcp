@@ -16,9 +16,18 @@ class UserLifecycleManagerTests(unittest.TestCase):
         (runtime / "groups.json").write_text('{"groups":["default"]}\n', encoding="utf-8")
         return OcservPaths(runtime / "users.json", runtime / "groups.json", runtime / "audit.log")
 
+    def _write_group_template(self, temp_dir: str) -> None:
+        template_dir = Path(temp_dir) / "group-templates"
+        template_dir.mkdir(parents=True, exist_ok=True)
+        (template_dir / "default.conf.tpl").write_text(
+            "# default\nipv4-network = 10.10.0.0/24\nipv4-netmask = 255.255.255.0\n",
+            encoding="utf-8",
+        )
+
     def test_create_disable_remove_user(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             paths = self._paths(temp_dir)
+            self._write_group_template(temp_dir)
             sink = AuditSink(paths.audit_log_file)
             allowed = GuardDecision(True, False)
             with patch(
@@ -37,7 +46,7 @@ class UserLifecycleManagerTests(unittest.TestCase):
                     SystemCommandResult(True, "[]", "", 0),
                 ],
             ):
-                created = createUser(paths, "alice", "default", allowed, sink, "req-1", "admin")
+                created = createUser(paths, "alice", "default", None, allowed, sink, "req-1", "admin")
                 disabled = disableUser(paths, "alice", allowed, sink, "req-2", "admin")
                 removed = removeUser(paths, "alice", allowed, sink, "req-3", "admin", force=True)
             created_user = cast(dict[str, object], created["user"])
@@ -60,6 +69,7 @@ class UserLifecycleManagerTests(unittest.TestCase):
             paths = OcservPaths(passwd_file, groups_file, runtime / "audit.log", command_prefix=())
             sink = AuditSink(paths.audit_log_file)
             allowed = GuardDecision(True, False)
+            self._write_group_template(temp_dir)
 
             def fake_run(command, input, capture_output, text, check):
                 passwd_file.write_text("alice:default:hashed-password\n", encoding="utf-8")
@@ -74,7 +84,7 @@ class UserLifecycleManagerTests(unittest.TestCase):
                     SystemCommandResult(True, '[{"username":"alice"}]', "", 0),
                 ],
             ):
-                created = createUser(paths, "alice", "default", allowed, sink, "req-1", "admin")
+                created = createUser(paths, "alice", "default", None, allowed, sink, "req-1", "admin")
 
             provisioning = cast(dict[str, str], created["provisioning"])
             self.assertEqual(cast(dict[str, object], created["user"])["username"], "alice")
@@ -83,6 +93,7 @@ class UserLifecycleManagerTests(unittest.TestCase):
     def test_remove_user_requires_force_when_active(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             paths = self._paths(temp_dir)
+            self._write_group_template(temp_dir)
             sink = AuditSink(paths.audit_log_file)
             allowed = GuardDecision(True, False)
             with patch(
@@ -95,9 +106,30 @@ class UserLifecycleManagerTests(unittest.TestCase):
                     SystemCommandResult(True, '[{"username":"alice"}]', "", 0),
                 ],
             ):
-                createUser(paths, "alice", "default", allowed, sink, "req-1", "admin")
+                createUser(paths, "alice", "default", None, allowed, sink, "req-1", "admin")
                 with self.assertRaisesRegex(ValueError, "ACTIVE_USER_REQUIRES_FORCE"):
                     removeUser(paths, "alice", allowed, sink, "req-2", "admin")
+
+    def test_create_user_with_static_ip(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            paths = self._paths(temp_dir)
+            self._write_group_template(temp_dir)
+            sink = AuditSink(paths.audit_log_file)
+            allowed = GuardDecision(True, False)
+            with patch(
+                "src.ocserv_adapter._run_command",
+                side_effect=[
+                    SystemCommandResult(True, "ok", "", 0),
+                    SystemCommandResult(True, "restarted", "", 0),
+                    SystemCommandResult(True, "active", "", 0),
+                    SystemCommandResult(True, '[{"username":"alice"}]', "", 0),
+                ],
+            ):
+                created = createUser(paths, "alice", "default", "10.10.0.10", allowed, sink, "req-1", "admin")
+
+            created_user = cast(dict[str, object], created["user"])
+            self.assertEqual(created_user["ipv4_address"], "10.10.0.10")
+            self.assertTrue((Path(temp_dir) / "config-per-user" / "alice").exists())
 
 
 if __name__ == "__main__":

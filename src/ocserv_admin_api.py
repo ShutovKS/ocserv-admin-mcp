@@ -33,7 +33,7 @@ from src.ocserv_adapter import OcservPaths, healthCheck, loadUsers, rollbackLast
 from src.policy_group_manager import assignGroup, createGroup, deleteGroup, disableUsersInGroup
 from src.safety_controls import InMemoryRateLimiter, OperatorIdentity, ProposedAdminAction, checkRateLimit, guardAction
 from src.session_manager import disconnectSessionForUser, listSessions
-from src.user_lifecycle_manager import createUser, disableUser, removeUser
+from src.user_lifecycle_manager import createUser, disableUser, removeUser, updateUserIp
 
 
 DEFAULT_RUNTIME_DIR = Path("/var/lib/ocserv-admin")
@@ -86,6 +86,7 @@ def _extract_bearer_token(environ: dict[str, Any]) -> str | None:
 def validateRequest(action: str, payload: dict[str, Any]) -> dict[str, Any]:
     required_fields = {
         "create_user": ("username",),
+        "update_user_ip": ("username", "ipv4_address"),
         "create_group": ("group",),
         "disconnect_session": ("username",),
         "disable_user": ("username",),
@@ -192,8 +193,28 @@ def executeApprovedAction(
         disconnected = disconnectSessionForUser(config.paths, str(validated_payload["username"]), audit_sink, request_id, actor.actor_id)
         return {"ok": True, **disconnected}
     if action == "create_user":
-        created = createUser(config.paths, str(validated_payload["username"]), validated_payload.get("group"), decision, audit_sink, request_id, actor.actor_id)
+        created = createUser(
+            config.paths,
+            str(validated_payload["username"]),
+            validated_payload.get("group"),
+            validated_payload.get("ipv4_address"),
+            decision,
+            audit_sink,
+            request_id,
+            actor.actor_id,
+        )
         return {"ok": True, **created}
+    if action == "update_user_ip":
+        updated = updateUserIp(
+            config.paths,
+            str(validated_payload["username"]),
+            str(validated_payload["ipv4_address"]),
+            decision,
+            audit_sink,
+            request_id,
+            actor.actor_id,
+        )
+        return {"ok": True, **updated}
     if action == "create_group":
         created_group = createGroup(
             config.paths,

@@ -98,6 +98,12 @@ class OcservAdminApiTests(unittest.TestCase):
     def test_create_user_endpoint_returns_deterministic_activation_result(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             config = self._config(temp_dir)
+            template_dir = Path(temp_dir) / "group-templates"
+            template_dir.mkdir(parents=True, exist_ok=True)
+            (template_dir / "default.conf.tpl").write_text(
+                "# default\nipv4-network = 10.10.0.0/24\nipv4-netmask = 255.255.255.0\n",
+                encoding="utf-8",
+            )
             app = build_app(config)
             with patch(
                 "src.ocserv_adapter._run_command",
@@ -108,11 +114,13 @@ class OcservAdminApiTests(unittest.TestCase):
                     SystemCommandResult(True, '[{"username":"alice"}]', "", 0),
                 ],
             ):
-                status, payload = self._request(app, "/actions/create_user", {"username": "alice", "group": "default"})
+                status, payload = self._request(app, "/actions/create_user", {"username": "alice", "group": "default", "ipv4_address": "10.10.0.10"})
             self.assertEqual(status, "200 OK")
             self.assertTrue(payload["ok"])
             self.assertEqual(payload["user"]["username"], "alice")
+            self.assertEqual(payload["user"]["ipv4_address"], "10.10.0.10")
             self.assertIn(str(Path(temp_dir) / "user-groups.json"), payload["changed_files"])
+            self.assertIn(str(Path(temp_dir) / "config-per-user" / "alice"), payload["changed_files"])
             self.assertIn(str(Path(temp_dir) / "templates" / "ocserv.conf.tpl"), payload["planned_files"])
             self.assertTrue(payload["verification"]["ok"])
             self.assertTrue(payload["activation"]["ok"])

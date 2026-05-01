@@ -7,6 +7,7 @@ from src.backend_client import (
     DEFAULT_RUNTIME_DIR,
     BackendClient,
     buildToolCatalog,
+    buildToolCatalogWithGroups,
     discoverGroupChoices,
     normalizeBackendResponse,
     paginateCollection,
@@ -26,6 +27,7 @@ class BackendClientTests(unittest.TestCase):
                 "show_user_ips",
                 "disconnect_session",
                 "create_user",
+                "update_user_ip",
                 "disable_user",
                 "disable_group_users",
                 "delete_user",
@@ -94,6 +96,10 @@ class BackendClientTests(unittest.TestCase):
         action, payload = planAction("disable_group_users", group="admins")
         self.assertEqual(action, "disable_group_users")
         self.assertEqual(payload, {"group": "admins"})
+
+        action, payload = planAction("create_user", username="alice", group="default", ipv4_address="10.10.0.10")
+        self.assertEqual(action, "create_user")
+        self.assertEqual(payload["ipv4_address"], "10.10.0.10")
 
         action, payload = planAction("create_group", group="vpn-a", ipv4_network="10.10.10.0/24", ipv4_netmask="255.255.255.0", routes=["10.10.10.0/255.255.255.0"])
         self.assertEqual(action, "create_group")
@@ -164,6 +170,22 @@ class BackendClientTests(unittest.TestCase):
         contents = config_path.read_text(encoding="utf-8")
         self.assertIn('"OCSERV_ADMIN_GROUPS_FILE": "/var/lib/ocserv-admin/groups.json"', contents)
         self.assertNotIn("OCSERV_ADMIN_ALLOWED_GROUPS", contents)
+
+    def test_build_tool_catalog_keeps_create_group_open_for_new_names(self) -> None:
+        catalog = buildToolCatalogWithGroups(("default",))
+
+        create_group_tool = next(tool for tool in catalog if tool["name"] == "create_group")
+        delete_group_tool = next(tool for tool in catalog if tool["name"] == "delete_group")
+        assign_group_tool = next(tool for tool in catalog if tool["name"] == "assign_group")
+        create_user_tool = next(tool for tool in catalog if tool["name"] == "create_user")
+
+        self.assertEqual(
+            create_group_tool["inputSchema"]["properties"]["group"],
+            {"type": "string", "minLength": 2, "maxLength": 32},
+        )
+        self.assertEqual(create_user_tool["inputSchema"]["properties"]["ipv4_address"], {"type": "string", "minLength": 7, "maxLength": 15})
+        self.assertEqual(delete_group_tool["inputSchema"]["properties"]["group"], {"type": "string", "enum": ["default"]})
+        self.assertEqual(assign_group_tool["inputSchema"]["properties"]["group"], {"type": "string", "enum": ["default"]})
 
 
 if __name__ == "__main__":

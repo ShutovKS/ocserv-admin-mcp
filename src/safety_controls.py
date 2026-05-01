@@ -38,6 +38,7 @@ ALLOWED_ACTIONS = {
     "show_user_ips",
     "disconnect_session",
     "create_user",
+    "update_user_ip",
     "disable_user",
     "disable_group_users",
     "delete_user",

@@ -43,6 +43,7 @@ ALLOWED_BACKEND_ACTIONS = {
     "show_user_ips",
     "disconnect_session",
     "create_user",
+    "update_user_ip",
     "disable_user",
     "disable_group_users",
     "delete_user",
@@ -62,6 +63,7 @@ EXPOSED_PUBLIC_TOOLS = (
     "show_user_ips",
     "disconnect_session",
     "create_user",
+    "update_user_ip",
     "disable_user",
     "disable_group_users",
     "delete_user",
@@ -79,7 +81,8 @@ ACTION_FIELDS: dict[str, tuple[str, ...]] = {
     "list_groups": (),
     "show_user_ips": (),
     "disconnect_session": ("username",),
-    "create_user": ("username", "group"),
+    "create_user": ("username", "group", "ipv4_address"),
+    "update_user_ip": ("username", "ipv4_address"),
     "disable_user": ("username",),
     "disable_group_users": ("group",),
     "delete_user": ("username", "force"),
@@ -95,6 +98,7 @@ ACTION_FIELDS: dict[str, tuple[str, ...]] = {
 REQUIRED_ACTION_FIELDS: dict[str, tuple[str, ...]] = {
     "disconnect_session": ("username",),
     "create_user": ("username", "group"),
+    "update_user_ip": ("username", "ipv4_address"),
     "disable_user": ("username",),
     "disable_group_users": ("group",),
     "delete_user": ("username",),
@@ -212,9 +216,29 @@ TOOL_METADATA: dict[str, dict[str, Any]] = {
             "properties": {
                 "username": {"type": "string", "minLength": 3, "maxLength": 32},
                 "group": {"type": "string", "minLength": 2, "maxLength": 32},
+                "ipv4_address": {"type": "string", "minLength": 7, "maxLength": 15},
                 "response_format": RESPONSE_FORMAT_SCHEMA,
             },
             "required": ["username", "group"],
+            "additionalProperties": False,
+        },
+        "annotations": {
+            "readOnlyHint": False,
+            "destructiveHint": False,
+            "idempotentHint": False,
+            "openWorldHint": False,
+        },
+    },
+    "update_user_ip": {
+        "description": "Assign or update a fixed IPv4 address for an existing VPN user.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "username": {"type": "string", "minLength": 3, "maxLength": 32},
+                "ipv4_address": {"type": "string", "minLength": 7, "maxLength": 15},
+                "response_format": RESPONSE_FORMAT_SCHEMA,
+            },
+            "required": ["username", "ipv4_address"],
             "additionalProperties": False,
         },
         "annotations": {
@@ -477,7 +501,7 @@ def buildToolCatalogWithGroups(group_choices: tuple[str, ...] | None) -> list[di
     catalog: list[dict[str, Any]] = []
     for action in EXPOSED_PUBLIC_TOOLS:
         metadata = json.loads(json.dumps(TOOL_METADATA[action]))
-        if group_choices and action in {"create_user", "assign_group", "disable_group_users", "create_group", "delete_group"}:
+        if group_choices and action in {"create_user", "assign_group", "disable_group_users", "delete_group"}:
             metadata["inputSchema"]["properties"]["group"] = {
                 "type": "string",
                 "enum": list(group_choices),
@@ -560,6 +584,10 @@ def _actionable_message(error_code: str) -> str:
         "ACTION_NOT_ALLOWED": "Use one of the approved public admin actions only.",
         "INVALID_USERNAME": "Provide a username that matches the ocserv-safe identifier format.",
         "INVALID_GROUP": "Provide an existing ocserv policy group identifier.",
+        "INVALID_IPV4_ADDRESS": "Provide a valid IPv4 address in dotted decimal format.",
+        "IP_ADDRESS_IN_USE": "Choose a different IPv4 address because that address is already assigned to another user.",
+        "GROUP_IPV4_POOL_REQUIRED": "Assign the user to a group with an IPv4 pool before setting a fixed IP.",
+        "IP_OUTSIDE_GROUP_POOL": "Choose an IPv4 address that belongs to the assigned group's IPv4 pool.",
         "GROUP_NOT_FOUND": "Choose one of the configured ocserv policy groups.",
         "GROUP_ALREADY_EXISTS": "Choose a different group name because that policy group already exists.",
         "GROUP_IN_USE": "Move or disable users in that group before deleting it.",
