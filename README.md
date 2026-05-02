@@ -24,11 +24,17 @@ It is **not** a bot, chat runtime, or general agent framework. It provides a con
 
 - `list_users`
 - `list_sessions`
+- `list_groups`
+- `show_user_ips`
 - `disconnect_session`
 - `create_user`
+- `update_user_ip`
 - `disable_user`
+- `disable_group_users`
 - `delete_user`
 - `assign_group`
+- `create_group`
+- `delete_group`
 - `reload_service`
 - `rollback_last_change`
 - `confirm_action`
@@ -57,4 +63,4 @@ It is **not** a bot, chat runtime, or general agent framework. It provides a con
 
 ## Operational guidance
 
-Start with `deploy/README.md` for host setup, runtime expectations, and recovery behavior.
+Start with `deploy/README.md` for host setup, runtime expectations, VPN client-to-client routing/firewall requirements, static per-user IP behavior, and recovery guidance.
