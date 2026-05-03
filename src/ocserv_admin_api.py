@@ -19,6 +19,7 @@
 
 from __future__ import annotations
 
+import argparse
 from dataclasses import asdict, dataclass
 import json
 import os
@@ -531,8 +532,37 @@ def build_config_from_env(runtime_root: Path | None = None) -> AdminApiConfig:
     )
 
 
+def _build_cli_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="ocserv-admin-api",
+        description="ocserv-admin backend API server",
+    )
+    parser.add_argument("--host", default=None, help="Bind address (default: $OCSERV_ADMIN_HOST or 127.0.0.1)")
+    parser.add_argument("--port", type=int, default=None, help="Bind port (default: $OCSERV_ADMIN_PORT or 8080)")
+    parser.add_argument("--log-level", default=None, choices=["DEBUG", "INFO", "WARNING", "ERROR"], help="Log level (default: INFO)")
+    parser.add_argument("--validate-config", action="store_true", help="Validate configuration and exit")
+    parser.add_argument("--version", action="version", version="%(prog)s 0.1.0")
+    return parser
+
+
 def main() -> None:
-    serve(build_config_from_env())
+    parser = _build_cli_parser()
+    args = parser.parse_args()
+
+    if args.log_level:
+        os.environ["OCSERV_ADMIN_LOG_LEVEL"] = args.log_level
+    if args.host:
+        os.environ["OCSERV_ADMIN_HOST"] = args.host
+    if args.port is not None:
+        os.environ["OCSERV_ADMIN_PORT"] = str(args.port)
+
+    config = build_config_from_env()
+
+    if args.validate_config:
+        _logger.info("[OcservAdminApi][main] configuration valid")
+        return
+
+    serve(config)
 
 
 if __name__ == "__main__":
