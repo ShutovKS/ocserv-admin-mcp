@@ -23,6 +23,7 @@ import argparse
 from dataclasses import asdict, dataclass
 import json
 import os
+import signal
 from pathlib import Path
 from typing import Any, Callable
 from uuid import uuid4
@@ -489,9 +490,27 @@ def serve(config: AdminApiConfig) -> None:
     setup_logging(level=os.environ.get("OCSERV_ADMIN_LOG_LEVEL", "INFO"))
     ensure_runtime_dirs(config)
     app = build_app(config)
+    audit_sink = AuditSink(config.paths.audit_log_file)
     _logger.info("[OcservAdminApi][serve] starting server on %s:%d", config.host, config.port)
     with make_server(config.host, config.port, app) as server:
+
+        def _shutdown_handler(signum: int, frame: object) -> None:
+            sig_name = signal.Signals(signum).name
+            _logger.info("[OcservAdminApi][serve] received %s, shutting down", sig_name)
+            recordAuditEvent(
+                {
+                    "event": "server_shutdown",
+                    "message": f"[OcservAdminApi][serve] graceful shutdown on {sig_name}",
+                    "details": {"signal": sig_name},
+                },
+                audit_sink,
+            )
+            server.shutdown()
+
+        signal.signal(signal.SIGTERM, _shutdown_handler)
+        signal.signal(signal.SIGINT, _shutdown_handler)
         server.serve_forever()
+    _logger.info("[OcservAdminApi][serve] server stopped")
 
 
 def ensure_runtime_dirs(config: AdminApiConfig) -> None:
