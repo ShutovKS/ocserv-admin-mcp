@@ -28,7 +28,7 @@ from uuid import uuid4
 from wsgiref.simple_server import make_server
 
 from src.audit_log import AuditSink, recordAuditEvent
-from src.confirmation_state import InMemoryConfirmationStore, PendingConfirmationRequest, createPendingConfirmation, resolvePendingConfirmation
+from src.confirmation_state import InMemoryConfirmationStore, PendingConfirmation, PendingConfirmationRequest, createPendingConfirmation, resolvePendingConfirmation
 from src.ocserv_adapter import OcservPaths, healthCheck, loadUsers, rollbackLastChange, safeReload, serializeCommandResult, validateConfig, listGroups, showUserIps
 from src.policy_group_manager import assignGroup, createGroup, deleteGroup, disableUsersInGroup
 from src.safety_controls import InMemoryRateLimiter, OperatorIdentity, ProposedAdminAction, checkRateLimit, guardAction
@@ -313,13 +313,13 @@ def _serialize_reload_result(result: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _serialize_pending_confirmation(pending: PendingConfirmationRequest | Any) -> dict[str, Any]:
+def _serialize_pending_confirmation(pending: PendingConfirmation) -> dict[str, Any]:
     return {
         "token": pending.token,
         "action": pending.action,
         "target_user": pending.target_user,
-        "target_group": getattr(pending, "target_group", None),
-        "summary": getattr(pending, "summary", None),
+        "target_group": pending.target_group,
+        "summary": pending.summary,
         "expires_at": pending.expires_at.isoformat(),
     }
 
