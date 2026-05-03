@@ -112,6 +112,193 @@ def validateRequest(action: str, payload: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
+@dataclass(slots=True)
+class _ActionContext:
+    config: AdminApiConfig
+    paths: OcservPaths
+    audit_sink: AuditSink
+    request_id: str
+    actor: OperatorIdentity
+    decision: Any
+    validated_payload: dict[str, Any]
+    store: InMemoryConfirmationStore
+
+
+def _handle_list_users(ctx: _ActionContext) -> dict[str, Any]:
+    users = loadUsers(ctx.paths)
+    recordAuditEvent(
+        {
+            "event": "users_listed",
+            "request_id": ctx.request_id,
+            "actor_id": ctx.actor.actor_id,
+            "command": "list_users",
+            "result": "ok",
+            "message": "[OcservAdminApi][executeApprovedAction][BLOCK_EXECUTE_APPROVED_ACTION] listed users",
+            "details": {"count": len(users)},
+        },
+        ctx.audit_sink,
+    )
+    return {"ok": True, "users": users}
+
+
+def _handle_list_sessions(ctx: _ActionContext) -> dict[str, Any]:
+    return {"ok": True, "sessions": listSessions(ctx.paths, ctx.audit_sink, ctx.request_id, ctx.actor.actor_id)}
+
+
+def _handle_list_groups(ctx: _ActionContext) -> dict[str, Any]:
+    return {"ok": True, "groups": listGroups(ctx.paths)}
+
+
+def _handle_show_user_ips(ctx: _ActionContext) -> dict[str, Any]:
+    return {"ok": True, "user_ips": showUserIps(ctx.paths, ctx.audit_sink, ctx.request_id, ctx.actor.actor_id)}
+
+
+def _handle_disconnect_session(ctx: _ActionContext) -> dict[str, Any]:
+    disconnected = disconnectSessionForUser(ctx.paths, str(ctx.validated_payload["username"]), ctx.audit_sink, ctx.request_id, ctx.actor.actor_id)
+    return {"ok": True, **disconnected}
+
+
+def _handle_create_user(ctx: _ActionContext) -> dict[str, Any]:
+    created = createUser(
+        ctx.paths,
+        str(ctx.validated_payload["username"]),
+        ctx.validated_payload.get("group"),
+        ctx.validated_payload.get("ipv4_address"),
+        ctx.decision,
+        ctx.audit_sink,
+        ctx.request_id,
+        ctx.actor.actor_id,
+    )
+    return {"ok": True, **created}
+
+
+def _handle_update_user_ip(ctx: _ActionContext) -> dict[str, Any]:
+    updated = updateUserIp(
+        ctx.paths,
+        str(ctx.validated_payload["username"]),
+        str(ctx.validated_payload["ipv4_address"]),
+        ctx.decision,
+        ctx.audit_sink,
+        ctx.request_id,
+        ctx.actor.actor_id,
+    )
+    return {"ok": True, **updated}
+
+
+def _handle_create_group(ctx: _ActionContext) -> dict[str, Any]:
+    created_group = createGroup(
+        ctx.paths,
+        str(ctx.validated_payload["group"]),
+        ctx.validated_payload.get("ipv4_network"),
+        ctx.validated_payload.get("ipv4_netmask"),
+        ctx.validated_payload.get("routes") or [],
+        ctx.audit_sink,
+        ctx.request_id,
+        ctx.actor.actor_id,
+    )
+    return {"ok": True, **created_group}
+
+
+def _handle_disable_user(ctx: _ActionContext) -> dict[str, Any]:
+    disabled = disableUser(ctx.paths, str(ctx.validated_payload["username"]), ctx.decision, ctx.audit_sink, ctx.request_id, ctx.actor.actor_id)
+    return {"ok": True, **disabled}
+
+
+def _handle_disable_group_users(ctx: _ActionContext) -> dict[str, Any]:
+    disabled_group_users = disableUsersInGroup(ctx.paths, str(ctx.validated_payload["group"]), ctx.decision, ctx.audit_sink, ctx.request_id, ctx.actor.actor_id)
+    return {"ok": True, **disabled_group_users}
+
+
+def _handle_delete_user(ctx: _ActionContext) -> dict[str, Any]:
+    removed = removeUser(
+        ctx.paths,
+        str(ctx.validated_payload["username"]),
+        ctx.decision,
+        ctx.audit_sink,
+        ctx.request_id,
+        ctx.actor.actor_id,
+        force=bool(ctx.validated_payload.get("force", False)),
+    )
+    return {"ok": True, **removed}
+
+
+def _handle_delete_group(ctx: _ActionContext) -> dict[str, Any]:
+    deleted_group = deleteGroup(ctx.paths, str(ctx.validated_payload["group"]), ctx.decision, ctx.audit_sink, ctx.request_id, ctx.actor.actor_id)
+    return {"ok": True, **deleted_group}
+
+
+def _handle_assign_group(ctx: _ActionContext) -> dict[str, Any]:
+    updated = assignGroup(ctx.paths, str(ctx.validated_payload["username"]), str(ctx.validated_payload["group"]), ctx.audit_sink, ctx.request_id, ctx.actor.actor_id)
+    return {"ok": True, **updated}
+
+
+def _handle_reload_service(ctx: _ActionContext) -> dict[str, Any]:
+    return {"ok": True, "reload": _serialize_reload_result(safeReload(ctx.paths, ctx.audit_sink, ctx.request_id, ctx.actor.actor_id))}
+
+
+def _handle_rollback_last_change(ctx: _ActionContext) -> dict[str, Any]:
+    return {"ok": True, "rollback": rollbackLastChange(ctx.paths, ctx.audit_sink, ctx.request_id, ctx.actor.actor_id)}
+
+
+def _handle_validate_config(ctx: _ActionContext) -> dict[str, Any]:
+    validation = validateConfig(ctx.paths, ctx.audit_sink, ctx.request_id, ctx.actor.actor_id)
+    return {"ok": validation.ok, "validation": _serialize_command_result(validation)}
+
+
+def _handle_confirm_action(ctx: _ActionContext) -> dict[str, Any]:
+    token = str(ctx.validated_payload["token"])
+    pending = ctx.store.get(token)
+    if pending is not None:
+        expected_action = _normalize_expected_confirmation_value(ctx.validated_payload.get("expected_action"))
+        expected_username = _normalize_expected_confirmation_value(ctx.validated_payload.get("expected_username"))
+        expected_group = _normalize_expected_confirmation_value(ctx.validated_payload.get("expected_group"))
+        if expected_action is not None and expected_action != pending.action:
+            return {"ok": False, "error_code": "INVALID_CONFIRMATION_CONTEXT", "confirmation": _serialize_pending_confirmation(pending)}
+        if expected_username is not None and expected_username != pending.target_user:
+            return {"ok": False, "error_code": "INVALID_CONFIRMATION_CONTEXT", "confirmation": _serialize_pending_confirmation(pending)}
+        if pending.target_group is not None and expected_group is not None and expected_group != pending.target_group:
+            return {"ok": False, "error_code": "INVALID_CONFIRMATION_CONTEXT", "confirmation": _serialize_pending_confirmation(pending)}
+    resolution = resolvePendingConfirmation(
+        ctx.store,
+        token,
+        str(ctx.validated_payload["decision"]),
+        ctx.audit_sink,
+        requested_actor_id=str(ctx.validated_payload.get("confirmation_actor_id") or ctx.actor.actor_id),
+    )
+    if resolution.execute_allowed and pending is not None:
+        resumed_payload = dict(pending.payload)
+        resumed_payload["request_id"] = pending.request_id
+        executed = executeApprovedAction(pending.action, resumed_payload, ctx.actor, ctx.config, ctx.store, confirmed_from_token=True)
+        return {"ok": True, "resolution": asdict(resolution), "confirmation": _serialize_pending_confirmation(pending), "executed": executed}
+    return {
+        "ok": resolution.execute_allowed,
+        "error_code": resolution.error_code,
+        "resolution": asdict(resolution),
+        "confirmation": _serialize_pending_confirmation(pending) if pending is not None else None,
+    }
+
+
+_ACTION_HANDLERS: dict[str, Callable[[_ActionContext], dict[str, Any]]] = {
+    "list_users": _handle_list_users,
+    "list_sessions": _handle_list_sessions,
+    "list_groups": _handle_list_groups,
+    "show_user_ips": _handle_show_user_ips,
+    "disconnect_session": _handle_disconnect_session,
+    "create_user": _handle_create_user,
+    "update_user_ip": _handle_update_user_ip,
+    "create_group": _handle_create_group,
+    "disable_user": _handle_disable_user,
+    "disable_group_users": _handle_disable_group_users,
+    "delete_user": _handle_delete_user,
+    "delete_group": _handle_delete_group,
+    "assign_group": _handle_assign_group,
+    "reload_service": _handle_reload_service,
+    "rollback_last_change": _handle_rollback_last_change,
+    "validate_config": _handle_validate_config,
+    "confirm_action": _handle_confirm_action,
+}
+
+
 def executeApprovedAction(
     action: str,
     payload: dict[str, Any],
@@ -168,127 +355,11 @@ def executeApprovedAction(
             }
         return {"ok": False, "error_code": decision.error_code, "status": "rejected"}
 
-    if action == "list_users":
-        users = loadUsers(config.paths)
-        recordAuditEvent(
-            {
-                "event": "users_listed",
-                "request_id": request_id,
-                "actor_id": actor.actor_id,
-                "command": "list_users",
-                "result": "ok",
-                "message": "[OcservAdminApi][executeApprovedAction][BLOCK_EXECUTE_APPROVED_ACTION] listed users",
-                "details": {"count": len(users)},
-            },
-            audit_sink,
-        )
-        return {"ok": True, "users": users}
-    if action == "list_sessions":
-        return {"ok": True, "sessions": listSessions(config.paths, audit_sink, request_id, actor.actor_id)}
-    if action == "list_groups":
-        return {"ok": True, "groups": listGroups(config.paths)}
-    if action == "show_user_ips":
-        return {"ok": True, "user_ips": showUserIps(config.paths, audit_sink, request_id, actor.actor_id)}
-    if action == "disconnect_session":
-        disconnected = disconnectSessionForUser(config.paths, str(validated_payload["username"]), audit_sink, request_id, actor.actor_id)
-        return {"ok": True, **disconnected}
-    if action == "create_user":
-        created = createUser(
-            config.paths,
-            str(validated_payload["username"]),
-            validated_payload.get("group"),
-            validated_payload.get("ipv4_address"),
-            decision,
-            audit_sink,
-            request_id,
-            actor.actor_id,
-        )
-        return {"ok": True, **created}
-    if action == "update_user_ip":
-        updated = updateUserIp(
-            config.paths,
-            str(validated_payload["username"]),
-            str(validated_payload["ipv4_address"]),
-            decision,
-            audit_sink,
-            request_id,
-            actor.actor_id,
-        )
-        return {"ok": True, **updated}
-    if action == "create_group":
-        created_group = createGroup(
-            config.paths,
-            str(validated_payload["group"]),
-            validated_payload.get("ipv4_network"),
-            validated_payload.get("ipv4_netmask"),
-            validated_payload.get("routes") or [],
-            audit_sink,
-            request_id,
-            actor.actor_id,
-        )
-        return {"ok": True, **created_group}
-    if action == "disable_user":
-        disabled = disableUser(config.paths, str(validated_payload["username"]), decision, audit_sink, request_id, actor.actor_id)
-        return {"ok": True, **disabled}
-    if action == "disable_group_users":
-        disabled_group_users = disableUsersInGroup(config.paths, str(validated_payload["group"]), decision, audit_sink, request_id, actor.actor_id)
-        return {"ok": True, **disabled_group_users}
-    if action == "delete_user":
-        removed = removeUser(
-            config.paths,
-            str(validated_payload["username"]),
-            decision,
-            audit_sink,
-            request_id,
-            actor.actor_id,
-            force=bool(validated_payload.get("force", False)),
-        )
-        return {"ok": True, **removed}
-    if action == "delete_group":
-        deleted_group = deleteGroup(config.paths, str(validated_payload["group"]), decision, audit_sink, request_id, actor.actor_id)
-        return {"ok": True, **deleted_group}
-    if action == "assign_group":
-        updated = assignGroup(config.paths, str(validated_payload["username"]), str(validated_payload["group"]), audit_sink, request_id, actor.actor_id)
-        return {"ok": True, **updated}
-    if action == "reload_service":
-        return {"ok": True, "reload": _serialize_reload_result(safeReload(config.paths, audit_sink, request_id, actor.actor_id))}
-    if action == "rollback_last_change":
-        return {"ok": True, "rollback": rollbackLastChange(config.paths, audit_sink, request_id, actor.actor_id)}
-    if action == "validate_config":
-        validation = validateConfig(config.paths, audit_sink, request_id, actor.actor_id)
-        return {"ok": validation.ok, "validation": _serialize_command_result(validation)}
-    if action == "confirm_action":
-        token = str(validated_payload["token"])
-        pending = store.get(token)
-        if pending is not None:
-            expected_action = _normalize_expected_confirmation_value(validated_payload.get("expected_action"))
-            expected_username = _normalize_expected_confirmation_value(validated_payload.get("expected_username"))
-            expected_group = _normalize_expected_confirmation_value(validated_payload.get("expected_group"))
-            if expected_action is not None and expected_action != pending.action:
-                return {"ok": False, "error_code": "INVALID_CONFIRMATION_CONTEXT", "confirmation": _serialize_pending_confirmation(pending)}
-            if expected_username is not None and expected_username != pending.target_user:
-                return {"ok": False, "error_code": "INVALID_CONFIRMATION_CONTEXT", "confirmation": _serialize_pending_confirmation(pending)}
-            if pending.target_group is not None and expected_group is not None and expected_group != pending.target_group:
-                return {"ok": False, "error_code": "INVALID_CONFIRMATION_CONTEXT", "confirmation": _serialize_pending_confirmation(pending)}
-        resolution = resolvePendingConfirmation(
-            store,
-            token,
-            str(validated_payload["decision"]),
-            audit_sink,
-            requested_actor_id=str(validated_payload.get("confirmation_actor_id") or actor.actor_id),
-        )
-        if resolution.execute_allowed and pending is not None:
-            resumed_payload = dict(pending.payload)
-            resumed_payload["request_id"] = pending.request_id
-            executed = executeApprovedAction(pending.action, resumed_payload, actor, config, store, confirmed_from_token=True)
-            return {"ok": True, "resolution": asdict(resolution), "confirmation": _serialize_pending_confirmation(pending), "executed": executed}
-        return {
-            "ok": resolution.execute_allowed,
-            "error_code": resolution.error_code,
-            "resolution": asdict(resolution),
-            "confirmation": _serialize_pending_confirmation(pending) if pending is not None else None,
-        }
-    raise ValueError("ACTION_NOT_ALLOWED")
+    ctx = _ActionContext(config=config, paths=config.paths, audit_sink=audit_sink, request_id=request_id, actor=actor, decision=decision, validated_payload=validated_payload, store=store)
+    handler = _ACTION_HANDLERS.get(action)
+    if handler is None:
+        raise ValueError("ACTION_NOT_ALLOWED")
+    return handler(ctx)
     # END_BLOCK_EXECUTE_APPROVED_ACTION
 
 
