@@ -30,6 +30,10 @@ from src.backend_client import (
     planAction,
 )
 
+from src.logging_config import get_logger, setup_logging
+
+_logger = get_logger("mcp")
+
 try:
     from mcp.server.lowlevel.server import Server as _MCPServer  # type: ignore[import-untyped]
     from mcp.server.lowlevel.server import NotificationOptions as _NotificationOptions  # type: ignore[import-untyped]
@@ -267,6 +271,8 @@ def buildServerFromEnv() -> OcservAdminMcpServer:
 
 
 def main() -> int:
+    setup_logging(level=os.environ.get("OCSERV_ADMIN_LOG_LEVEL", "INFO"))
+    _logger.info("[MCP][main] starting ocserv-admin MCP server")
     server = buildServerFromEnv()
     import asyncio
 

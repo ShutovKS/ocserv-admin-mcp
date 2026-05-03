@@ -33,8 +33,10 @@ from src.ocserv_adapter import OcservPaths, healthCheck, loadUsers, rollbackLast
 from src.policy_group_manager import assignGroup, createGroup, deleteGroup, disableUsersInGroup
 from src.safety_controls import InMemoryRateLimiter, OperatorIdentity, ProposedAdminAction, checkRateLimit, guardAction
 from src.session_manager import disconnectSessionForUser, listSessions
+from src.logging_config import get_logger, setup_logging
 from src.user_lifecycle_manager import createUser, disableUser, removeUser, updateUserIp
 
+_logger = get_logger("api")
 
 DEFAULT_RUNTIME_DIR = Path("/var/lib/ocserv-admin")
 DEFAULT_AUDIT_LOG_FILE = Path("/var/log/ocserv-admin/audit.log")
@@ -475,8 +477,10 @@ def build_app(config: AdminApiConfig) -> Callable[[dict[str, Any], Callable[...,
 
 
 def serve(config: AdminApiConfig) -> None:
+    setup_logging(level=os.environ.get("OCSERV_ADMIN_LOG_LEVEL", "INFO"))
     ensure_runtime_dirs(config)
     app = build_app(config)
+    _logger.info("[OcservAdminApi][serve] starting server on %s:%d", config.host, config.port)
     with make_server(config.host, config.port, app) as server:
         server.serve_forever()
 

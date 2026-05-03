@@ -189,6 +189,17 @@
       </annotations>
     </M-ACTION-REGISTRY>
 
+    <M-LOGGING-CONFIG NAME="logging_config" TYPE="UTILITY" STATUS="implemented">
+      <purpose>Centralized logging configuration with JSON formatter for structured operational logs.</purpose>
+      <path>src/logging_config.py</path>
+      <depends>none</depends>
+      <annotations>
+        <fn-setup_logging PURPOSE="Configure root ocserv_admin logger" />
+        <fn-get_logger PURPOSE="Get child logger under ocserv_admin namespace" />
+        <class-JsonFormatter PURPOSE="JSON log formatter for structured output" />
+      </annotations>
+    </M-LOGGING-CONFIG>
+
     <M-AUDIT-LOG NAME="audit_log" TYPE="UTILITY" STATUS="implemented">
       <purpose>Emit an immutable-ish operation trail with structured redaction-aware fields for administrative actions.</purpose>
       <path>src/audit_log.py</path>

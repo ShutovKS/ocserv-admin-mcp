@@ -25,6 +25,9 @@ from typing import Any
 
 import src.ocserv_adapter as _oa
 from src.audit_log import AuditSink, recordAuditEvent
+from src.logging_config import get_logger
+
+_logger = get_logger("commands")
 
 
 def serializeCommandResult(result: _oa.SystemCommandResult | None) -> dict[str, Any] | None:
@@ -125,7 +128,10 @@ def validateConfig(
     actor_id: str = "unknown-actor",
 ) -> _oa.SystemCommandResult:
     # START_BLOCK_VALIDATE_CONFIG
+    _logger.debug("[OcservAdapter][validateConfig] running validation")
     result = _oa._run_command(_oa._with_prefix(paths, paths.validate_command), timeout=_oa.VALIDATION_COMMAND_TIMEOUT)
+    if not result.ok:
+        _logger.error("[OcservAdapter][validateConfig] validation failed: %s", result.stderr)
     recordAuditEvent(
         {
             "event": "config_validated",
