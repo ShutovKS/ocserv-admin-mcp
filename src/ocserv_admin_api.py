@@ -404,14 +404,22 @@ def build_app(config: AdminApiConfig) -> Callable[[dict[str, Any], Callable[...,
 
 
 def serve(config: AdminApiConfig) -> None:
+    ensure_runtime_dirs(config)
     app = build_app(config)
     with make_server(config.host, config.port, app) as server:
         server.serve_forever()
 
 
+def ensure_runtime_dirs(config: AdminApiConfig) -> None:
+    runtime = config.paths.rollback_state_file.parent
+    runtime.mkdir(parents=True, exist_ok=True)
+    if not config.paths.groups_file.exists() and config.paths.groups_file.suffix == ".json":
+        config.paths.groups_file.parent.mkdir(parents=True, exist_ok=True)
+        config.paths.groups_file.write_text(json.dumps({"groups": ["default", "admins"]}, indent=2) + "\n", encoding="utf-8")
+
+
 def build_config_from_env(runtime_root: Path | None = None) -> AdminApiConfig:
     runtime = runtime_root or Path(os.environ.get("OCSERV_ADMIN_RUNTIME_DIR", str(DEFAULT_RUNTIME_DIR)))
-    runtime.mkdir(parents=True, exist_ok=True)
     paths = OcservPaths(
         users_file=Path(os.environ.get("OCSERV_ADMIN_USERS_FILE", str(DEFAULT_USERS_FILE if runtime_root is None else runtime / "users.json"))),
         groups_file=Path(os.environ.get("OCSERV_ADMIN_GROUPS_FILE", str(runtime / "groups.json"))),
@@ -430,9 +438,6 @@ def build_config_from_env(runtime_root: Path | None = None) -> AdminApiConfig:
         user_group_map_file=Path(os.environ.get("OCSERV_ADMIN_USER_GROUP_MAP_FILE", str(DEFAULT_USER_GROUP_MAP_FILE if runtime_root is None else runtime / "user-groups.json"))),
         rollback_state_file=Path(os.environ.get("OCSERV_ADMIN_ROLLBACK_STATE_FILE", str(runtime / "last-rollback.json"))),
     )
-    if not paths.groups_file.exists() and paths.groups_file.suffix == ".json":
-        paths.groups_file.parent.mkdir(parents=True, exist_ok=True)
-        paths.groups_file.write_text(json.dumps({"groups": ["default", "admins"]}, indent=2) + "\n", encoding="utf-8")
     auth_token = os.environ.get("OCSERV_ADMIN_AUTH_TOKEN")
     if not auth_token:
         raise RuntimeError("OCSERV_ADMIN_AUTH_TOKEN_MISSING")
