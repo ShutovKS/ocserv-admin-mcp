@@ -34,5 +34,24 @@ class SessionManagerTests(unittest.TestCase):
             self.assertTrue(disconnect["ok"])
 
 
+    def test_disconnect_session_raises_on_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            runtime = Path(temp_dir)
+            (runtime / "groups.json").write_text('{"groups":["default"]}\n', encoding="utf-8")
+            paths = OcservPaths(runtime / "users.json", runtime / "groups.json", runtime / "audit.log")
+            with patch("src.session_manager.disconnectSession", return_value=SystemCommandResult(False, "", "disconnect failed", 1)):
+                with self.assertRaisesRegex(ValueError, "SESSION_DISCONNECT_FAILED"):
+                    disconnectSessionForUser(paths, "alice", None, "req-2", "admin")
+
+    def test_list_sessions_handles_empty_output(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            runtime = Path(temp_dir)
+            (runtime / "groups.json").write_text('{"groups":["default"]}\n', encoding="utf-8")
+            paths = OcservPaths(runtime / "users.json", runtime / "groups.json", runtime / "audit.log")
+            with patch("src.session_manager.runOcctl", return_value=[]):
+                sessions = listSessions(paths, None, "req-1", "admin")
+            self.assertEqual(sessions, [])
+
+
 if __name__ == "__main__":
     unittest.main()

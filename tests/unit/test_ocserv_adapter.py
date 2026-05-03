@@ -10,15 +10,19 @@ from src.ocserv_adapter import (
     activateService,
     applyManagedMutation,
     assignGroupRecord,
+    createGroupRecord,
     createUserRecord,
-    disconnectSession,
+    deleteGroupRecord,
     disableUserRecord,
+    disableUsersInGroupRecord,
+    disconnectSession,
     healthCheck,
     inventoryConfig,
     preflightMutation,
     rollbackLastChange,
     runOcctl,
     safeReload,
+    showUserIps,
 )
 
 
@@ -333,6 +337,170 @@ class OcservAdapterTests(unittest.TestCase):
             users_payload = json.loads(paths.users_file.read_text(encoding="utf-8")) if paths.users_file.exists() else {"users": []}
             self.assertEqual(users_payload["users"], [])
             self.assertEqual(rolled_back["rolled_back_action"], "create_user")
+
+
+    def test_rollback_fails_when_no_snapshot_exists(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            paths = self._make_paths(temp_dir)
+            with self.assertRaisesRegex(ValueError, "ROLLBACK_NOT_AVAILABLE"):
+                rollbackLastChange(paths)
+
+    def test_show_user_ips_parses_json_output(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            paths = self._make_paths(temp_dir)
+            with patch(
+                "src.ocserv_adapter._run_command",
+                return_value=SystemCommandResult(
+                    True,
+                    json.dumps([
+                        {"username": "alice", "ip": "10.0.0.1", "group": "default"},
+                        {"username": "bob", "ip": "10.0.0.2", "group": "admins"},
+                    ]),
+                    "",
+                    0,
+                ),
+            ):
+                result = showUserIps(paths)
+            self.assertEqual(len(result), 2)
+            self.assertEqual(result[0]["username"], "alice")
+            self.assertEqual(result[0]["ip"], "10.0.0.1")
+            self.assertEqual(result[1]["username"], "bob")
+
+    def test_show_user_ips_parses_tabular_output(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            paths = self._make_paths(temp_dir)
+            with patch(
+                "src.ocserv_adapter._run_command",
+                return_value=SystemCommandResult(
+                    True,
+                    json.dumps([
+                        {"status": "alice default 10.0.0.1 connected"},
+                        {"status": "bob admins 10.0.0.2 connected"},
+                    ]),
+                    "",
+                    0,
+                ),
+            ):
+                result = showUserIps(paths)
+            self.assertEqual(len(result), 2)
+            self.assertEqual(result[0]["username"], "alice")
+            self.assertEqual(result[0]["ip"], "10.0.0.1")
+
+    def test_apply_managed_mutation_rolls_back_on_activation_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            paths = self._make_paths(temp_dir)
+            with patch(
+                "src.ocserv_adapter._run_command",
+                side_effect=[
+                    SystemCommandResult(True, "ok", "", 0),
+                    SystemCommandResult(False, "", "restart failed", 1),
+                    SystemCommandResult(False, "", "not active", 1),
+                ],
+            ):
+                result = applyManagedMutation(
+                    paths,
+                    "create_user",
+                    lambda: createUserRecord(paths, "alice", "default"),
+                    username="alice",
+                    group="default",
+                )
+            self.assertFalse(result["ok"])
+            self.assertTrue(result["rolled_back"])
+
+    def test_create_group_record_generates_correct_template(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            paths = self._make_paths(temp_dir)
+            result = createGroupRecord(paths, "vpn-users", "192.168.1.0/24", "255.255.255.0", ["10.0.0.0/8"])
+            self.assertEqual(result["group"], "vpn-users")
+            self.assertEqual(result["group_details"]["ipv4_network"], "192.168.1.0/24")
+            template_path = Path(temp_dir) / "group-templates" / "vpn-users.conf.tpl"
+            self.assertTrue(template_path.exists())
+            content = template_path.read_text(encoding="utf-8")
+            self.assertIn("ipv4-network = 192.168.1.0/24", content)
+            self.assertIn("ipv4-netmask = 255.255.255.0", content)
+            self.assertIn("route = 10.0.0.0/8", content)
+            self.assertIn("restrict-user-to-routes = true", content)
+
+    def test_delete_group_record_rejects_protected_groups(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            paths = self._make_paths(temp_dir)
+            with self.assertRaisesRegex(ValueError, "PROTECTED_GROUP"):
+                deleteGroupRecord(paths, "default")
+            with self.assertRaisesRegex(ValueError, "PROTECTED_GROUP"):
+                deleteGroupRecord(paths, "admins")
+
+    def test_delete_group_record_rejects_group_in_use(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            paths = self._make_paths(temp_dir)
+            createGroupRecord(paths, "vpn-users", None, None, [])
+            createUserRecord(paths, "alice", "vpn-users")
+            with self.assertRaisesRegex(ValueError, "GROUP_IN_USE"):
+                deleteGroupRecord(paths, "vpn-users")
+
+    def test_delete_group_record_cleans_template_and_config(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            paths = self._make_paths(temp_dir)
+            createGroupRecord(paths, "vpn-users", "192.168.1.0/24", "255.255.255.0", [])
+            template_path = Path(temp_dir) / "group-templates" / "vpn-users.conf.tpl"
+            self.assertTrue(template_path.exists())
+            deleteGroupRecord(paths, "vpn-users")
+            self.assertFalse(template_path.exists())
+            groups = json.loads(paths.groups_file.read_text(encoding="utf-8"))
+            self.assertNotIn("vpn-users", groups["groups"])
+
+    def test_disable_users_in_group_disables_only_target_group(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            paths = self._make_paths(temp_dir)
+            createUserRecord(paths, "alice", "default")
+            createUserRecord(paths, "bob", "admins")
+            createUserRecord(paths, "charlie", "default")
+            result = disableUsersInGroupRecord(paths, "default")
+            self.assertEqual(result["group"], "default")
+            self.assertEqual(len(result["affected_users"]), 2)
+            affected_names = {u["username"] for u in result["affected_users"]}
+            self.assertIn("alice", affected_names)
+            self.assertIn("charlie", affected_names)
+            self.assertNotIn("bob", affected_names)
+
+    def test_disable_users_in_group_skips_already_disabled(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            paths = self._make_paths(temp_dir)
+            createUserRecord(paths, "alice", "default")
+            createUserRecord(paths, "bob", "default")
+            disableUserRecord(paths, "alice")
+            result = disableUsersInGroupRecord(paths, "default")
+            self.assertEqual(len(result["affected_users"]), 1)
+            self.assertEqual(result["affected_users"][0]["username"], "bob")
+
+    def test_disable_users_in_group_plain_backend_uses_ocpasswd(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            runtime = Path(temp_dir)
+            groups_file = runtime / "groups.json"
+            groups_file.write_text(json.dumps({"groups": ["default"]}) + "\n", encoding="utf-8")
+            passwd_file = runtime / "passwd"
+            passwd_file.write_text("alice:default:hash1\nbob:default:hash2\n", encoding="utf-8")
+            paths = OcservPaths(passwd_file, groups_file, runtime / "audit.log", command_prefix=())
+
+            def fake_lock(command, *args, **kwargs):
+                username = command[-1] if isinstance(command, (list, tuple)) else "unknown"
+                content = passwd_file.read_text(encoding="utf-8")
+                new_lines = []
+                for line in content.splitlines():
+                    parts = line.split(":", 2)
+                    if len(parts) == 3 and parts[0] == username and not parts[2].startswith("!"):
+                        new_lines.append(f"{parts[0]}:{parts[1]}:!{parts[2]}")
+                    else:
+                        new_lines.append(line)
+                passwd_file.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
+                return SystemCommandResult(True, "ok", "", 0)
+
+            with patch("src.ocserv_adapter._run_command", side_effect=fake_lock):
+                result = disableUsersInGroupRecord(paths, "default")
+            self.assertEqual(len(result["affected_users"]), 2)
+            content = passwd_file.read_text(encoding="utf-8")
+            for line in content.strip().splitlines():
+                parts = line.split(":", 2)
+                self.assertTrue(parts[2].startswith("!"), f"Expected disabled hash for {parts[0]}")
 
 
 if __name__ == "__main__":
