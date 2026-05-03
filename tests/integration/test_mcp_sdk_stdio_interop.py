@@ -121,6 +121,11 @@ asyncio.run(main())
                     backend.wait(timeout=5)
                 except subprocess.TimeoutExpired:
                     backend.kill()
+                    backend.wait(timeout=5)
+                if backend.stdout is not None:
+                    backend.stdout.close()
+                if backend.stderr is not None:
+                    backend.stderr.close()
 
     def _wait_for_port(self, port: int) -> None:
         import time
