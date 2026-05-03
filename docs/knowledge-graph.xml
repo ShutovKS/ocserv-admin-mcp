@@ -176,6 +176,19 @@
       </annotations>
     </M-SESSION-MANAGER>
 
+    <M-ACTION-REGISTRY NAME="action_registry" TYPE="TYPES" STATUS="implemented">
+      <purpose>Single source of truth for the approved action vocabulary, field schemas, and classification.</purpose>
+      <path>src/action_registry.py</path>
+      <depends>none</depends>
+      <annotations>
+        <const-ALLOWED_ACTIONS PURPOSE="Complete set of actions the system accepts" />
+        <const-EXPOSED_PUBLIC_TOOLS PURPOSE="Ordered tuple of actions exposed through MCP" />
+        <const-DESTRUCTIVE_ACTIONS PURPOSE="Actions requiring explicit confirmation" />
+        <const-ACTION_FIELDS PURPOSE="Allowed payload fields per action" />
+        <const-REQUIRED_ACTION_FIELDS PURPOSE="Mandatory payload fields per action" />
+      </annotations>
+    </M-ACTION-REGISTRY>
+
     <M-AUDIT-LOG NAME="audit_log" TYPE="UTILITY" STATUS="implemented">
       <purpose>Emit an immutable-ish operation trail with structured redaction-aware fields for administrative actions.</purpose>
       <path>src/audit_log.py</path>

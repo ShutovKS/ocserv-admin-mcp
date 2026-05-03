@@ -29,28 +29,10 @@ from typing import Iterable
 from src.audit_log import AuditSink, recordAuditEvent
 
 
+from src.action_registry import ALLOWED_ACTIONS, DESTRUCTIVE_ACTIONS
+
 USERNAME_PATTERN = re.compile(r"^[A-Za-z0-9_-]{3,32}$")
 GROUP_PATTERN = re.compile(r"^[A-Za-z0-9_-]{2,32}$")
-ALLOWED_ACTIONS = {
-    "list_users",
-    "list_sessions",
-    "list_groups",
-    "show_user_ips",
-    "disconnect_session",
-    "create_user",
-    "update_user_ip",
-    "disable_user",
-    "disable_group_users",
-    "delete_user",
-    "assign_group",
-    "create_group",
-    "delete_group",
-    "reload_service",
-    "rollback_last_change",
-    "validate_config",
-    "confirm_action",
-}
-DESTRUCTIVE_ACTIONS = {"disable_user", "disable_group_users", "delete_user", "delete_group", "assign_group", "disconnect_session", "rollback_last_change"}
 
 
 @dataclass(slots=True)

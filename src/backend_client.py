@@ -30,87 +30,18 @@ import urllib.error
 import urllib.request
 
 from src.audit_log import AuditSink, recordAuditEvent
+from src.action_registry import (
+    ALLOWED_ACTIONS as ALLOWED_BACKEND_ACTIONS,
+    ACTION_FIELDS,
+    BOOLEAN_FIELDS,
+    DECISION_VALUES,
+    EXPOSED_PUBLIC_TOOLS,
+    REQUIRED_ACTION_FIELDS,
+)
 
 
 DEFAULT_RUNTIME_DIR = Path("/var/lib/ocserv-admin")
 BACKEND_UNAVAILABLE_ERROR = "BACKEND_UNAVAILABLE"
-
-
-ALLOWED_BACKEND_ACTIONS = {
-    "list_users",
-    "list_sessions",
-    "list_groups",
-    "show_user_ips",
-    "disconnect_session",
-    "create_user",
-    "update_user_ip",
-    "disable_user",
-    "disable_group_users",
-    "delete_user",
-    "assign_group",
-    "create_group",
-    "delete_group",
-    "reload_service",
-    "rollback_last_change",
-    "validate_config",
-    "confirm_action",
-}
-
-EXPOSED_PUBLIC_TOOLS = (
-    "list_users",
-    "list_sessions",
-    "list_groups",
-    "show_user_ips",
-    "disconnect_session",
-    "create_user",
-    "update_user_ip",
-    "disable_user",
-    "disable_group_users",
-    "delete_user",
-    "assign_group",
-    "create_group",
-    "delete_group",
-    "reload_service",
-    "rollback_last_change",
-    "confirm_action",
-)
-
-ACTION_FIELDS: dict[str, tuple[str, ...]] = {
-    "list_users": (),
-    "list_sessions": (),
-    "list_groups": (),
-    "show_user_ips": (),
-    "disconnect_session": ("username",),
-    "create_user": ("username", "group", "ipv4_address"),
-    "update_user_ip": ("username", "ipv4_address"),
-    "disable_user": ("username",),
-    "disable_group_users": ("group",),
-    "delete_user": ("username", "force"),
-    "assign_group": ("username", "group"),
-    "create_group": ("group", "ipv4_network", "ipv4_netmask", "routes"),
-    "delete_group": ("group",),
-    "reload_service": (),
-    "rollback_last_change": (),
-    "validate_config": (),
-    "confirm_action": ("token", "decision", "expected_action", "expected_username", "expected_group"),
-}
-
-REQUIRED_ACTION_FIELDS: dict[str, tuple[str, ...]] = {
-    "disconnect_session": ("username",),
-    "create_user": ("username", "group"),
-    "update_user_ip": ("username", "ipv4_address"),
-    "disable_user": ("username",),
-    "disable_group_users": ("group",),
-    "delete_user": ("username",),
-    "assign_group": ("username", "group"),
-    "create_group": ("group",),
-    "delete_group": ("group",),
-    "rollback_last_change": (),
-    "confirm_action": ("token", "decision"),
-}
-
-BOOLEAN_FIELDS = {"force"}
-DECISION_VALUES = {"confirm", "cancel"}
 
 RESPONSE_FORMAT_SCHEMA = {
     "type": "string",
