@@ -200,6 +200,16 @@
       </annotations>
     </M-LOGGING-CONFIG>
 
+    <M-METRICS NAME="metrics" TYPE="RUNTIME" STATUS="implemented">
+      <purpose>Collect and expose Prometheus-compatible metrics for monitoring.</purpose>
+      <path>src/metrics.py</path>
+      <depends>none</depends>
+      <annotations>
+        <class-MetricsCollector PURPOSE="Thread-safe metrics collector" />
+        <fn-format_prometheus PURPOSE="Render metrics in Prometheus text exposition format" />
+      </annotations>
+    </M-METRICS>
+
     <M-AUDIT-LOG NAME="audit_log" TYPE="UTILITY" STATUS="implemented">
       <purpose>Emit an immutable-ish operation trail with structured redaction-aware fields for administrative actions.</purpose>
       <path>src/audit_log.py</path>

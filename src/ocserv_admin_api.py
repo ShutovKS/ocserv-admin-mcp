@@ -24,6 +24,7 @@ from dataclasses import asdict, dataclass
 import json
 import os
 import signal
+import time as _time
 from pathlib import Path
 from typing import Any, Callable
 from uuid import uuid4
@@ -36,6 +37,7 @@ from src.policy_group_manager import assignGroup, createGroup, deleteGroup, disa
 from src.safety_controls import InMemoryRateLimiter, OperatorIdentity, ProposedAdminAction, checkRateLimit, guardAction
 from src.session_manager import disconnectSessionForUser, listSessions
 from src.logging_config import get_logger, setup_logging
+from src.metrics import MetricsCollector, format_prometheus
 from src.user_lifecycle_manager import createUser, disableUser, removeUser, updateUserIp
 
 _logger = get_logger("api")
@@ -440,9 +442,10 @@ def _build_confirmation_store(config: AdminApiConfig) -> InMemoryConfirmationSto
     return InMemoryConfirmationStore()
 
 
-def build_app(config: AdminApiConfig) -> Callable[[dict[str, Any], Callable[..., Any]], list[bytes]]:
+def build_app(config: AdminApiConfig, metrics: MetricsCollector | None = None) -> Callable[[dict[str, Any], Callable[..., Any]], list[bytes]]:
     store = _build_confirmation_store(config)
     rate_limiter = InMemoryRateLimiter(config.rate_limit_max_requests, config.rate_limit_window_seconds, read_max_requests=config.rate_limit_read_max_requests)
+    _metrics = metrics or MetricsCollector()
 
     def app(environ: dict[str, Any], start_response: Callable[..., Any]) -> list[bytes]:
         path = environ.get("PATH_INFO", "")
@@ -450,7 +453,11 @@ def build_app(config: AdminApiConfig) -> Callable[[dict[str, Any], Callable[...,
         actor_id = environ.get("HTTP_X_ACTOR_ID", "unknown-actor")
         actor = OperatorIdentity(actor_id=actor_id, authorized=False)
         try:
-            if method == "GET" and path == "/health":
+            if method == "GET" and path == "/metrics":
+                metrics_body = format_prometheus(_metrics).encode("utf-8")
+                start_response("200 OK", [("Content-Type", "text/plain; version=0.0.4; charset=utf-8"), ("Content-Length", str(len(metrics_body)))])
+                return [metrics_body]
+            elif method == "GET" and path == "/health":
                 health = healthCheck(config.paths, AuditSink(config.paths.audit_log_file), uuid4().hex, "health-probe")
                 status_code = "200 OK" if health.ok else "503 Service Unavailable"
                 status, headers, body = _json_response(status_code, {
@@ -482,8 +489,10 @@ def build_app(config: AdminApiConfig) -> Callable[[dict[str, Any], Callable[...,
                 action = path.removeprefix("/actions/")
                 if not checkRateLimit(rate_limiter, f"backend-actor:{actor.actor_id}", action=action):
                     raise ValueError("RATE_LIMITED")
+                t0 = _time.monotonic()
                 payload = _load_json_body(environ)
                 result = executeApprovedAction(action, payload, actor, config, store)
+                _metrics.record_request(action, _time.monotonic() - t0, error=not result.get("ok", False))
                 status_code = "200 OK" if result.get("ok") or result.get("status") == "pending_confirmation" else "400 Bad Request"
                 status, headers, body = _json_response(status_code, result)
             else:
