@@ -29,7 +29,7 @@ from uuid import uuid4
 from wsgiref.simple_server import make_server
 
 from src.audit_log import AuditSink, recordAuditEvent
-from src.confirmation_state import InMemoryConfirmationStore, PendingConfirmation, PendingConfirmationRequest, createPendingConfirmation, resolvePendingConfirmation
+from src.confirmation_state import FileBackedConfirmationStore, InMemoryConfirmationStore, PendingConfirmation, PendingConfirmationRequest, createPendingConfirmation, resolvePendingConfirmation
 from src.ocserv_adapter import OcservPaths, healthCheck, loadUsers, rollbackLastChange, safeReload, serializeCommandResult, validateConfig, listGroups, showUserIps
 from src.policy_group_manager import assignGroup, createGroup, deleteGroup, disableUsersInGroup
 from src.safety_controls import InMemoryRateLimiter, OperatorIdentity, ProposedAdminAction, checkRateLimit, guardAction
@@ -427,8 +427,16 @@ def _normalize_expected_confirmation_value(value: Any) -> str | None:
     return normalized
 
 
+def _build_confirmation_store(config: AdminApiConfig) -> InMemoryConfirmationStore | FileBackedConfirmationStore:
+    store_type = os.environ.get("OCSERV_ADMIN_CONFIRMATION_STORE", "memory")
+    if store_type == "file":
+        store_path = config.paths.rollback_state_file.parent / "confirmations.json"
+        return FileBackedConfirmationStore(store_path)
+    return InMemoryConfirmationStore()
+
+
 def build_app(config: AdminApiConfig) -> Callable[[dict[str, Any], Callable[..., Any]], list[bytes]]:
-    store = InMemoryConfirmationStore()
+    store = _build_confirmation_store(config)
     rate_limiter = InMemoryRateLimiter(config.rate_limit_max_requests, config.rate_limit_window_seconds)
 
     def app(environ: dict[str, Any], start_response: Callable[..., Any]) -> list[bytes]:

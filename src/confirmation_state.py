@@ -14,14 +14,17 @@
 #   PendingConfirmation - Stored pending confirmation state.
 #   ConfirmationResolution - Result of a confirmation resolution attempt.
 #   InMemoryConfirmationStore - Deterministic runtime store for pending confirmations.
+#   FileBackedConfirmationStore - Persistent file-backed confirmation store with expiry pruning.
 #   createPendingConfirmation - Create and record a pending confirmation.
 #   resolvePendingConfirmation - Resolve a confirmation token once.
 # END_MODULE_MAP
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
@@ -71,6 +74,70 @@ class InMemoryConfirmationStore:
 
     def put(self, record: PendingConfirmation) -> None:
         self._records[record.token] = record
+
+    def get(self, token: str) -> PendingConfirmation | None:
+        return self._records.get(token)
+
+
+class FileBackedConfirmationStore:
+    """Persistent confirmation store backed by a JSON file in the runtime directory."""
+
+    def __init__(self, path: Path) -> None:
+        self._path = path
+        self._records: dict[str, PendingConfirmation] = {}
+        self._load()
+
+    def _load(self) -> None:
+        if not self._path.exists():
+            return
+        try:
+            data = json.loads(self._path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return
+        now = datetime.now(UTC)
+        for token, entry in data.items():
+            if not isinstance(entry, dict):
+                continue
+            expires_at = datetime.fromisoformat(entry["expires_at"])
+            if expires_at < now:
+                continue
+            self._records[token] = PendingConfirmation(
+                token=entry["token"],
+                action=entry["action"],
+                actor_id=entry["actor_id"],
+                target_user=entry["target_user"],
+                target_group=entry.get("target_group"),
+                summary=entry.get("summary"),
+                request_id=entry["request_id"],
+                status=entry["status"],
+                expires_at=expires_at,
+                payload=entry.get("payload", {}),
+            )
+
+    def _flush(self) -> None:
+        serialized: dict[str, dict[str, Any]] = {}
+        now = datetime.now(UTC)
+        for token, record in self._records.items():
+            if record.expires_at < now:
+                continue
+            serialized[token] = {
+                "token": record.token,
+                "action": record.action,
+                "actor_id": record.actor_id,
+                "target_user": record.target_user,
+                "target_group": record.target_group,
+                "summary": record.summary,
+                "request_id": record.request_id,
+                "status": record.status,
+                "expires_at": record.expires_at.isoformat(),
+                "payload": record.payload,
+            }
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        self._path.write_text(json.dumps(serialized, indent=2) + "\n", encoding="utf-8")
+
+    def put(self, record: PendingConfirmation) -> None:
+        self._records[record.token] = record
+        self._flush()
 
     def get(self, token: str) -> PendingConfirmation | None:
         return self._records.get(token)
