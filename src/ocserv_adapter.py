@@ -121,9 +121,15 @@ def _write_json(path: Path, payload: Any) -> None:
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
-def _run_command(command: tuple[str, ...]) -> SystemCommandResult:
+DEFAULT_COMMAND_TIMEOUT = 30
+VALIDATION_COMMAND_TIMEOUT = 60
+
+
+def _run_command(command: tuple[str, ...], *, timeout: int = DEFAULT_COMMAND_TIMEOUT) -> SystemCommandResult:
     try:
-        completed = subprocess.run(command, capture_output=True, text=True, check=False)
+        completed = subprocess.run(command, capture_output=True, text=True, check=False, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return SystemCommandResult(ok=False, stdout="", stderr="COMMAND_TIMEOUT", returncode=-1)
     except FileNotFoundError as error:
         return SystemCommandResult(ok=False, stdout="", stderr=str(error), returncode=127)
     return SystemCommandResult(
@@ -1271,7 +1277,7 @@ def createUserRecord(paths: OcservPaths, username: str, group: str | None, ipv4_
     if not _uses_json_user_store(paths.users_file):
         generated_password = secrets.token_urlsafe(18)
         command = _with_prefix(paths, (paths.ocpasswd_bin, "-c", str(paths.users_file), *(("-g", group) if group else ()), username))
-        result = subprocess.run(command, input=f"{generated_password}\n{generated_password}\n", capture_output=True, text=True, check=False)
+        result = subprocess.run(command, input=f"{generated_password}\n{generated_password}\n", capture_output=True, text=True, check=False, timeout=DEFAULT_COMMAND_TIMEOUT)
         if result.returncode != 0:
             raise ValueError("USER_CREATE_FAILED")
         created_users = _load_user_payload(paths)
@@ -1553,7 +1559,7 @@ def validateConfig(
     actor_id: str = "unknown-actor",
 ) -> SystemCommandResult:
     # START_BLOCK_VALIDATE_CONFIG
-    result = _run_command(_with_prefix(paths, paths.validate_command))
+    result = _run_command(_with_prefix(paths, paths.validate_command), timeout=VALIDATION_COMMAND_TIMEOUT)
     recordAuditEvent(
         {
             "event": "config_validated",
@@ -1585,7 +1591,7 @@ def reloadService(
     actor_id: str = "unknown-actor",
 ) -> SystemCommandResult:
     # START_BLOCK_SAFE_RELOAD
-    result = _run_command(_with_prefix(paths, paths.reload_command))
+    result = _run_command(_with_prefix(paths, paths.reload_command), timeout=VALIDATION_COMMAND_TIMEOUT)
     recordAuditEvent(
         {
             "event": "service_reloaded",

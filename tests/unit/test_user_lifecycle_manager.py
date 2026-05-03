@@ -71,7 +71,7 @@ class UserLifecycleManagerTests(unittest.TestCase):
             allowed = GuardDecision(True, False)
             self._write_group_template(temp_dir)
 
-            def fake_run(command, input, capture_output, text, check):
+            def fake_run(command, input, capture_output, text, check, **kwargs):
                 passwd_file.write_text("alice:default:hashed-password\n", encoding="utf-8")
                 return type("Completed", (), {"returncode": 0})()
 

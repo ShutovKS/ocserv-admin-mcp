@@ -142,7 +142,7 @@ class OcservAdminApiTests(unittest.TestCase):
             )
             app = build_app(config)
 
-            def fake_run(command, input, capture_output, text, check):
+            def fake_run(command, input, capture_output, text, check, **kwargs):
                 (runtime / "passwd").write_text("alice:default:hashed-password\n", encoding="utf-8")
                 return type("Completed", (), {"returncode": 0})()
 
