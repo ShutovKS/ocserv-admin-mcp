@@ -60,6 +60,7 @@ class AdminApiConfig:
     paths: OcservPaths
     rate_limit_max_requests: int = 20
     rate_limit_window_seconds: int = 60
+    rate_limit_read_max_requests: int | None = None
 
 
 SERVER_VERSION = "0.1.0"
@@ -441,7 +442,7 @@ def _build_confirmation_store(config: AdminApiConfig) -> InMemoryConfirmationSto
 
 def build_app(config: AdminApiConfig) -> Callable[[dict[str, Any], Callable[..., Any]], list[bytes]]:
     store = _build_confirmation_store(config)
-    rate_limiter = InMemoryRateLimiter(config.rate_limit_max_requests, config.rate_limit_window_seconds)
+    rate_limiter = InMemoryRateLimiter(config.rate_limit_max_requests, config.rate_limit_window_seconds, read_max_requests=config.rate_limit_read_max_requests)
 
     def app(environ: dict[str, Any], start_response: Callable[..., Any]) -> list[bytes]:
         path = environ.get("PATH_INFO", "")
@@ -478,9 +479,9 @@ def build_app(config: AdminApiConfig) -> Callable[[dict[str, Any], Callable[...,
                 if token != config.auth_token:
                     raise PermissionError("UNAUTHORIZED_CLIENT")
                 actor = OperatorIdentity(actor_id=actor_id, authorized=True)
-                if not checkRateLimit(rate_limiter, f"backend-actor:{actor.actor_id}"):
-                    raise ValueError("RATE_LIMITED")
                 action = path.removeprefix("/actions/")
+                if not checkRateLimit(rate_limiter, f"backend-actor:{actor.actor_id}", action=action):
+                    raise ValueError("RATE_LIMITED")
                 payload = _load_json_body(environ)
                 result = executeApprovedAction(action, payload, actor, config, store)
                 status_code = "200 OK" if result.get("ok") or result.get("status") == "pending_confirmation" else "400 Bad Request"
@@ -577,6 +578,7 @@ def build_config_from_env(runtime_root: Path | None = None) -> AdminApiConfig:
         paths=paths,
         rate_limit_max_requests=int(os.environ.get("OCSERV_ADMIN_RATE_LIMIT_MAX_REQUESTS", "20")),
         rate_limit_window_seconds=int(os.environ.get("OCSERV_ADMIN_RATE_LIMIT_WINDOW_SECONDS", "60")),
+        rate_limit_read_max_requests=int(os.environ.get("OCSERV_ADMIN_RATE_LIMIT_READ_MAX_REQUESTS")) if os.environ.get("OCSERV_ADMIN_RATE_LIMIT_READ_MAX_REQUESTS") else None,
     )
 
 

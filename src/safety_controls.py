@@ -13,9 +13,9 @@
 #   OperatorIdentity - Structured operator authorization input.
 #   ProposedAdminAction - Structured candidate backend action.
 #   GuardDecision - Decision outcome for guard evaluation.
-#   InMemoryRateLimiter - Minimal fixed-window limiter for operator requests.
+#   InMemoryRateLimiter - Sliding-window rate limiter with per-action limits.
 #   guardAction - Validate actor, action, and payload safety before execution.
-#   checkRateLimit - Enforce a fixed-window request limit for one key.
+#   checkRateLimit - Enforce a sliding-window request limit for one key.
 #   confirmDestructiveAction - Check whether a destructive action is confirmed.
 # END_MODULE_MAP
 
@@ -29,7 +29,7 @@ from typing import Iterable
 from src.audit_log import AuditSink, recordAuditEvent
 
 
-from src.action_registry import ALLOWED_ACTIONS, DESTRUCTIVE_ACTIONS
+from src.action_registry import ALLOWED_ACTIONS, DESTRUCTIVE_ACTIONS, READ_ACTIONS
 
 USERNAME_PATTERN = re.compile(r"^[A-Za-z0-9_-]{3,32}$")
 GROUP_PATTERN = re.compile(r"^[A-Za-z0-9_-]{2,32}$")
@@ -63,6 +63,7 @@ class GuardDecision:
 class InMemoryRateLimiter:
     max_requests: int
     window_seconds: int
+    read_max_requests: int | None = None
     _events: dict[str, list[datetime]] = field(default_factory=dict)
 
 
@@ -72,15 +73,19 @@ def _prune_rate_limit_window(events: list[datetime], *, now: datetime, window_se
 
 
 # START_CONTRACT: checkRateLimit
-#   PURPOSE: Enforce a fixed-window request limit for one operator-scoped key.
-#   INPUTS: { limiter: InMemoryRateLimiter - limiter policy and state, key: str - scope key, now: datetime | None - optional deterministic clock }
+#   PURPOSE: Enforce a sliding-window request limit for one operator-scoped key.
+#   INPUTS: { limiter: InMemoryRateLimiter - limiter policy and state, key: str - scope key, action: str | None - action name for per-action limits, now: datetime | None - optional deterministic clock }
 #   OUTPUTS: { bool - true when the request is within the configured limit }
 #   SIDE_EFFECTS: [stores accepted timestamps in limiter state]
 #   LINKS: [guardAction]
 # END_CONTRACT: checkRateLimit
-def checkRateLimit(limiter: InMemoryRateLimiter, key: str, now: datetime | None = None) -> bool:
+def checkRateLimit(limiter: InMemoryRateLimiter, key: str, action: str | None = None, now: datetime | None = None) -> bool:
     if limiter.max_requests <= 0 or limiter.window_seconds <= 0:
         return True
+
+    max_req = limiter.max_requests
+    if action is not None and action in READ_ACTIONS and limiter.read_max_requests is not None:
+        max_req = limiter.read_max_requests
 
     current_time = now or datetime.now(UTC)
     events = _prune_rate_limit_window(
@@ -88,7 +93,7 @@ def checkRateLimit(limiter: InMemoryRateLimiter, key: str, now: datetime | None 
         now=current_time,
         window_seconds=limiter.window_seconds,
     )
-    if len(events) >= limiter.max_requests:
+    if len(events) >= max_req:
         limiter._events[key] = events
         return False
 

@@ -13,6 +13,7 @@
 #   ALLOWED_ACTIONS - Complete set of actions the system accepts.
 #   EXPOSED_PUBLIC_TOOLS - Ordered tuple of actions exposed through the MCP tool surface.
 #   DESTRUCTIVE_ACTIONS - Actions requiring explicit confirmation before execution.
+#   READ_ACTIONS - Read-only actions (higher rate limit).
 #   ACTION_FIELDS - Allowed payload fields per action.
 #   REQUIRED_ACTION_FIELDS - Mandatory payload fields per action.
 #   BOOLEAN_FIELDS - Fields that accept boolean values.
@@ -59,6 +60,14 @@ EXPOSED_PUBLIC_TOOLS: tuple[str, ...] = (
     "rollback_last_change",
     "confirm_action",
 )
+
+READ_ACTIONS: set[str] = {
+    "list_users",
+    "list_sessions",
+    "list_groups",
+    "show_user_ips",
+    "validate_config",
+}
 
 DESTRUCTIVE_ACTIONS: set[str] = {
     "disable_user",
