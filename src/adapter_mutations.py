@@ -28,6 +28,7 @@ import src.ocserv_adapter as _oa
 import src.adapter_commands as _cmd
 import src.adapter_templates as _tpl
 from src.audit_log import AuditSink, recordAuditEvent
+from src.file_lock import MutationLock
 
 
 def _inventory_conflicts(
@@ -436,6 +437,29 @@ def activateService(
 
 
 def applyManagedMutation(
+    paths: _oa.OcservPaths,
+    action: str,
+    mutate: Callable[[], dict[str, Any]],
+    *,
+    username: str | None = None,
+    group: str | None = None,
+    ipv4_address: str | None = None,
+    force: bool = False,
+    audit_sink: AuditSink | None = None,
+    request_id: str = "unknown-request",
+    actor_id: str = "unknown-actor",
+) -> dict[str, Any]:
+    lock_dir = _oa._resolved_rollback_state_file(paths).parent
+    with MutationLock(lock_dir):
+        return _apply_managed_mutation_locked(
+            paths, action, mutate,
+            username=username, group=group, ipv4_address=ipv4_address,
+            force=force, audit_sink=audit_sink,
+            request_id=request_id, actor_id=actor_id,
+        )
+
+
+def _apply_managed_mutation_locked(
     paths: _oa.OcservPaths,
     action: str,
     mutate: Callable[[], dict[str, Any]],
