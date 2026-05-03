@@ -62,6 +62,9 @@ class AdminApiConfig:
     rate_limit_window_seconds: int = 60
 
 
+SERVER_VERSION = "0.1.0"
+
+
 def _json_response(status: str, payload: dict[str, Any]) -> tuple[str, list[tuple[str, str]], bytes]:
     body = json.dumps(payload, sort_keys=True).encode("utf-8")
     return status, [("Content-Type", "application/json"), ("Content-Length", str(len(body)))], body
@@ -449,7 +452,25 @@ def build_app(config: AdminApiConfig) -> Callable[[dict[str, Any], Callable[...,
             if method == "GET" and path == "/health":
                 health = healthCheck(config.paths, AuditSink(config.paths.audit_log_file), uuid4().hex, "health-probe")
                 status_code = "200 OK" if health.ok else "503 Service Unavailable"
-                status, headers, body = _json_response(status_code, {"ok": health.ok, "service": "ocserv-admin", "ocserv": _serialize_command_result(health)})
+                status, headers, body = _json_response(status_code, {
+                    "ok": health.ok,
+                    "service": "ocserv-admin",
+                    "version": SERVER_VERSION,
+                    "ocserv": _serialize_command_result(health),
+                })
+            elif method == "GET" and path == "/readiness":
+                checks: dict[str, bool] = {
+                    "users_file": config.paths.users_file.parent.exists(),
+                    "groups_file": config.paths.groups_file.exists(),
+                    "ocserv_service": healthCheck(config.paths).ok,
+                }
+                ready = all(checks.values())
+                status_code = "200 OK" if ready else "503 Service Unavailable"
+                status, headers, body = _json_response(status_code, {
+                    "ready": ready,
+                    "checks": checks,
+                    "version": SERVER_VERSION,
+                })
             elif method == "POST" and path.startswith("/actions/"):
                 if not _is_loopback_request(environ):
                     raise PermissionError("REMOTE_ACCESS_FORBIDDEN")
