@@ -250,15 +250,27 @@ def listAllowedGroups(paths: OcservPaths) -> set[str]:
 
 # --- User data helpers ---
 
-def _load_plain_user_payload(passwd_file: Path) -> dict[str, dict[str, Any]]:
+def _load_plain_user_payload(passwd_file: Path, audit_sink: AuditSink | None = None) -> dict[str, dict[str, Any]]:
     users: dict[str, dict[str, Any]] = {}
     if not passwd_file.exists():
         return users
-    for raw_line in passwd_file.read_text(encoding="utf-8").splitlines():
+    for line_number, raw_line in enumerate(passwd_file.read_text(encoding="utf-8").splitlines(), start=1):
         line = raw_line.strip()
         if not line:
             continue
-        username, group, password_hash = line.split(":", 2)
+        parts = line.split(":", 2)
+        if len(parts) < 3:
+            recordAuditEvent(
+                {
+                    "event": "corrupt_user_record",
+                    "error_code": "CORRUPT_USER_RECORD",
+                    "message": "[OcservAdapter][_load_plain_user_payload] skipped malformed passwd line",
+                    "details": {"line_number": line_number, "file": str(passwd_file)},
+                },
+                audit_sink,
+            )
+            continue
+        username, group, password_hash = parts
         normalized_group = None if group in {"", "*"} else group
         users[username] = {
             "username": username,
