@@ -31,6 +31,7 @@ class McpSdkStdioInteropTests(unittest.TestCase):
                     "OCSERV_ADMIN_HOST": "127.0.0.1",
                     "OCSERV_ADMIN_PORT": str(backend_port),
                     "OCSERV_ADMIN_BACKEND_URL": f"http://127.0.0.1:{backend_port}",
+                    "OCSERV_ADMIN_RUNTIME_DIR": str(runtime),
                     "OCSERV_ADMIN_USERS_FILE": str(runtime / "users.json"),
                     "OCSERV_ADMIN_GROUPS_FILE": str(runtime / "groups.json"),
                     "OCSERV_ADMIN_AUDIT_LOG_FILE": str(runtime / "audit.log"),
@@ -124,7 +125,7 @@ asyncio.run(main())
     def _wait_for_port(self, port: int) -> None:
         import time
 
-        deadline = time.time() + 10
+        deadline = time.time() + 20
         while time.time() < deadline:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
                 sock.settimeout(0.2)

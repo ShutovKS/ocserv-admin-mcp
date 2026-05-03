@@ -17,6 +17,7 @@ class OcservAdminApiTests(unittest.TestCase):
             {
                 "OCSERV_ADMIN_AUTH_TOKEN": "secret-token",
                 "OCSERV_ADMIN_ALLOWED_ACTORS": "mcp-client",
+                "OCSERV_ADMIN_RUNTIME_DIR": temp_dir,
                 "OCSERV_ADMIN_USERS_FILE": str(Path(temp_dir) / "users.json"),
                 "OCSERV_ADMIN_GROUPS_FILE": str(Path(temp_dir) / "groups.json"),
                 "OCSERV_ADMIN_AUDIT_LOG_FILE": str(Path(temp_dir) / "audit.log"),
