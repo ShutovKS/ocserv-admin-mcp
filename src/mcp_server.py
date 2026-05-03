@@ -20,8 +20,6 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass
-from importlib import import_module
-from types import SimpleNamespace
 from typing import Any
 
 from src.backend_client import (
@@ -33,24 +31,18 @@ from src.backend_client import (
 )
 
 try:
-    _mcp_server_module = import_module("mcp.server.lowlevel.server")
-    _mcp_stdio_module = import_module("mcp.server.stdio")
-    _mcp_models = import_module("mcp.server.models")
-    _mcp_types = import_module("mcp.types")
-    _MCPServer = getattr(_mcp_server_module, "Server")
-    _NotificationOptions = getattr(_mcp_server_module, "NotificationOptions")
-    _stdio_server = getattr(_mcp_stdio_module, "stdio_server")
-    _InitializationOptions = getattr(_mcp_models, "InitializationOptions")
-    _CallToolResult = getattr(_mcp_types, "CallToolResult")
-    _TextContent = getattr(_mcp_types, "TextContent")
-    _Tool = getattr(_mcp_types, "Tool")
-    _ToolAnnotations = getattr(_mcp_types, "ToolAnnotations")
+    from mcp.server.lowlevel.server import Server as _MCPServer  # type: ignore[import-untyped]
+    from mcp.server.lowlevel.server import NotificationOptions as _NotificationOptions  # type: ignore[import-untyped]
+    from mcp.server.stdio import stdio_server as _stdio_server  # type: ignore[import-untyped]
+    from mcp.types import CallToolResult as _CallToolResult  # type: ignore[import-untyped]
+    from mcp.types import TextContent as _TextContent  # type: ignore[import-untyped]
+    from mcp.types import Tool as _Tool  # type: ignore[import-untyped]
+    from mcp.types import ToolAnnotations as _ToolAnnotations  # type: ignore[import-untyped]
 except ImportError as error:  # pragma: no cover - exercised in runtime environments without dependency installed
     MCP_IMPORT_ERROR = error
     _MCPServer = None  # type: ignore[assignment]
     _NotificationOptions = None  # type: ignore[assignment]
     _stdio_server = None  # type: ignore[assignment]
-    _InitializationOptions = None  # type: ignore[assignment]
     _CallToolResult = None  # type: ignore[assignment]
     _TextContent = None  # type: ignore[assignment]
     _Tool = None  # type: ignore[assignment]
@@ -168,13 +160,15 @@ def _catalog_entry_to_tool(entry: dict[str, Any]) -> Any:
         inputSchema=entry.get("inputSchema") or {"type": "object", "properties": {}, "additionalProperties": False},
         annotations=tool_annotations,
     )
+    # SDK compat: some MCP SDK versions expose only camelCase attributes;
+    # add snake_case aliases so consumers work regardless of SDK version (mcp>=1.0,<2.0).
     if not hasattr(tool, "input_schema"):
-        setattr(tool, "input_schema", tool.inputSchema)
+        tool.input_schema = tool.inputSchema  # type: ignore[attr-defined]
     if not hasattr(tool.annotations, "read_only_hint"):
-        setattr(tool.annotations, "read_only_hint", annotation_payload.get("readOnlyHint"))
-        setattr(tool.annotations, "destructive_hint", annotation_payload.get("destructiveHint"))
-        setattr(tool.annotations, "idempotent_hint", annotation_payload.get("idempotentHint"))
-        setattr(tool.annotations, "open_world_hint", annotation_payload.get("openWorldHint"))
+        tool.annotations.read_only_hint = annotation_payload.get("readOnlyHint")  # type: ignore[attr-defined]
+        tool.annotations.destructive_hint = annotation_payload.get("destructiveHint")  # type: ignore[attr-defined]
+        tool.annotations.idempotent_hint = annotation_payload.get("idempotentHint")  # type: ignore[attr-defined]
+        tool.annotations.open_world_hint = annotation_payload.get("openWorldHint")  # type: ignore[attr-defined]
     return tool
 
 
@@ -219,10 +213,11 @@ def _build_call_tool_result(normalized: dict[str, Any], response_format: str | N
         structuredContent=normalized,
         isError=normalized["result"]["status"] != "ok",
     )
+    # SDK compat: add snake_case aliases for camelCase properties (mcp>=1.0,<2.0).
     if not hasattr(result, "structured_content"):
-        setattr(result, "structured_content", normalized)
+        result.structured_content = normalized  # type: ignore[attr-defined]
     if not hasattr(result, "is_error"):
-        setattr(result, "is_error", normalized["result"]["status"] != "ok")
+        result.is_error = normalized["result"]["status"] != "ok"  # type: ignore[attr-defined]
     return result
 
 
