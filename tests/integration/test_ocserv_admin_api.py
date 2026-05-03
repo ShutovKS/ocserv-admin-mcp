@@ -375,5 +375,118 @@ class OcservAdminApiTests(unittest.TestCase):
             self.assertTrue(confirm_payload["executed"]["disconnect"]["ok"])
 
 
+    def test_create_group_and_delete_group_full_flow(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = self._config(temp_dir)
+            app = build_app(config)
+            status, payload = self._request(app, "/actions/create_group", {"group": "vpn-users", "ipv4_network": "10.10.0.0/24", "ipv4_netmask": "255.255.255.0", "routes": ["10.0.0.0/8"]})
+            self.assertEqual(status, "200 OK")
+            self.assertEqual(payload["group"], "vpn-users")
+            groups = json.loads(config.paths.groups_file.read_text(encoding="utf-8"))
+            self.assertIn("vpn-users", groups["groups"])
+            pending_status, pending_payload = self._request(app, "/actions/delete_group", {"group": "vpn-users"})
+            self.assertEqual(pending_status, "200 OK")
+            self.assertEqual(pending_payload["status"], "pending_confirmation")
+            confirm_status, confirm_payload = self._request(app, "/actions/confirm_action", {"token": pending_payload["token"], "decision": "confirm"})
+            self.assertEqual(confirm_status, "200 OK")
+            self.assertTrue(confirm_payload["ok"])
+            groups_after = json.loads(config.paths.groups_file.read_text(encoding="utf-8"))
+            self.assertNotIn("vpn-users", groups_after["groups"])
+
+    def test_disable_group_users_full_flow(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = self._config(temp_dir)
+            app = build_app(config)
+            with patch(
+                "src.ocserv_adapter._run_command",
+                side_effect=[
+                    SystemCommandResult(True, "ok", "", 0),
+                    SystemCommandResult(True, "restarted", "", 0),
+                    SystemCommandResult(True, "active", "", 0),
+                    SystemCommandResult(True, '[{"username":"alice"}]', "", 0),
+                    SystemCommandResult(True, "ok", "", 0),
+                    SystemCommandResult(True, "restarted", "", 0),
+                    SystemCommandResult(True, "active", "", 0),
+                    SystemCommandResult(True, '[{"username":"bob"}]', "", 0),
+                ],
+            ):
+                self._request(app, "/actions/create_user", {"username": "alice", "group": "default"})
+                self._request(app, "/actions/create_user", {"username": "bob", "group": "default"})
+            pending_status, pending_payload = self._request(app, "/actions/disable_group_users", {"group": "default"})
+            self.assertEqual(pending_status, "200 OK")
+            self.assertEqual(pending_payload["status"], "pending_confirmation")
+            confirm_status, confirm_payload = self._request(app, "/actions/confirm_action", {"token": pending_payload["token"], "decision": "confirm"})
+            self.assertEqual(confirm_status, "200 OK")
+            self.assertTrue(confirm_payload["ok"])
+            self.assertEqual(len(confirm_payload["executed"]["affected_users"]), 2)
+
+    def test_update_user_ip_full_flow(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = self._config(temp_dir)
+            template_dir = Path(temp_dir) / "group-templates"
+            template_dir.mkdir(parents=True, exist_ok=True)
+            (template_dir / "default.conf.tpl").write_text(
+                "# default\nipv4-network = 10.10.0.0/24\nipv4-netmask = 255.255.255.0\n",
+                encoding="utf-8",
+            )
+            app = build_app(config)
+            with patch(
+                "src.ocserv_adapter._run_command",
+                side_effect=[
+                    SystemCommandResult(True, "ok", "", 0),
+                    SystemCommandResult(True, "restarted", "", 0),
+                    SystemCommandResult(True, "active", "", 0),
+                    SystemCommandResult(True, '[{"username":"alice"}]', "", 0),
+                    SystemCommandResult(True, "ok", "", 0),
+                    SystemCommandResult(True, "restarted", "", 0),
+                    SystemCommandResult(True, "active", "", 0),
+                    SystemCommandResult(True, '[{"username":"alice"}]', "", 0),
+                ],
+            ):
+                self._request(app, "/actions/create_user", {"username": "alice", "group": "default", "ipv4_address": "10.10.0.10"})
+                status, payload = self._request(app, "/actions/update_user_ip", {"username": "alice", "ipv4_address": "10.10.0.20"})
+            self.assertEqual(status, "200 OK")
+            self.assertTrue(payload["ok"])
+            self.assertEqual(payload["user"]["ipv4_address"], "10.10.0.20")
+            per_user_config = (Path(temp_dir) / "config-per-user" / "alice").read_text(encoding="utf-8")
+            self.assertIn("10.10.0.20", per_user_config)
+
+    def test_rollback_last_change_full_flow(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = self._config(temp_dir)
+            app = build_app(config)
+            with patch(
+                "src.ocserv_adapter._run_command",
+                side_effect=[
+                    SystemCommandResult(True, "ok", "", 0),
+                    SystemCommandResult(True, "restarted", "", 0),
+                    SystemCommandResult(True, "active", "", 0),
+                    SystemCommandResult(True, '[{"username":"alice"}]', "", 0),
+                ],
+            ):
+                self._request(app, "/actions/create_user", {"username": "alice", "group": "default"})
+            users_before_rollback = json.loads(config.paths.users_file.read_text(encoding="utf-8"))
+            self.assertEqual(len(users_before_rollback["users"]), 1)
+            pending_status, pending_payload = self._request(app, "/actions/rollback_last_change", {})
+            self.assertEqual(pending_status, "200 OK")
+            self.assertEqual(pending_payload["status"], "pending_confirmation")
+            with patch(
+                "src.ocserv_adapter._run_command",
+                side_effect=[
+                    SystemCommandResult(True, "ok", "", 0),
+                    SystemCommandResult(True, "restarted", "", 0),
+                    SystemCommandResult(True, "active", "", 0),
+                ],
+            ):
+                confirm_status, confirm_payload = self._request(app, "/actions/confirm_action", {"token": pending_payload["token"], "decision": "confirm"})
+            self.assertEqual(confirm_status, "200 OK")
+            self.assertTrue(confirm_payload["ok"])
+            if config.paths.users_file.exists():
+                users_after_rollback = json.loads(config.paths.users_file.read_text(encoding="utf-8"))
+                self.assertEqual(len(users_after_rollback["users"]), 0)
+            else:
+                pass  # file was removed by rollback (pre-creation state)
+
+
 if __name__ == "__main__":
     unittest.main()
