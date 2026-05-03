@@ -81,19 +81,65 @@
     </M-OCSERV-ADMIN-API>
 
     <M-OCSERV-ADAPTER NAME="ocserv_adapter" TYPE="INTEGRATION" STATUS="implemented">
-      <purpose>Wrap ocserv system operations, deterministic managed config files, validation, reload handling, rollback, and command execution safely.</purpose>
+      <purpose>Core types, filesystem helpers, user/group CRUD, and backward-compatible re-exports for the ocserv adapter layer.</purpose>
       <path>src/ocserv_adapter.py</path>
-      <depends>M-AUDIT-LOG, M-SAFETY-CONTROLS</depends>
+      <depends>M-AUDIT-LOG, M-ADAPTER-COMMANDS, M-ADAPTER-TEMPLATES, M-ADAPTER-MUTATIONS</depends>
       <verification-ref>V-M-OCSERV-ADAPTER</verification-ref>
       <annotations>
-        <fn-inventoryConfig PURPOSE="Inventory managed config, auth, group templates, and user-group mapping surfaces" />
-        <fn-preflightMutation PURPOSE="Validate mutation preconditions and deterministic write scope before edits" />
-        <fn-applyManagedMutation PURPOSE="Apply mutate -> validate -> reload -> verify with rollback on failure" />
-        <fn-runOcctl PURPOSE="Execute occtl commands and normalize outputs" />
-        <fn-validateConfig PURPOSE="Validate ocserv-related config before service mutation" />
-        <fn-reloadService PURPOSE="Reload ocserv safely with rollback-oriented safeguards" />
+        <type-OcservPaths PURPOSE="Filesystem and command configuration for the backend" />
+        <type-SystemCommandResult PURPOSE="Structured subprocess result" />
+        <fn-loadUsers PURPOSE="Return canonical file-backed users" />
+        <fn-listGroups PURPOSE="List allowed groups with membership details" />
+        <fn-createUserRecord PURPOSE="Create a file-backed user" />
+        <fn-deleteUserRecord PURPOSE="Delete a file-backed user" />
+        <fn-disableUserRecord PURPOSE="Disable an existing user" />
+        <fn-assignGroupRecord PURPOSE="Update a user policy group safely" />
       </annotations>
     </M-OCSERV-ADAPTER>
+
+    <M-ADAPTER-COMMANDS NAME="adapter_commands" TYPE="INTEGRATION" STATUS="implemented">
+      <purpose>Wrap subprocess calls for occtl, service validation, reload, and health checks.</purpose>
+      <path>src/adapter_commands.py</path>
+      <depends>M-OCSERV-ADAPTER, M-AUDIT-LOG</depends>
+      <verification-ref>V-M-OCSERV-ADAPTER</verification-ref>
+      <annotations>
+        <fn-runOcctl PURPOSE="Execute approved occtl reads and normalize their output" />
+        <fn-disconnectSession PURPOSE="Disconnect an active ocserv session through occtl" />
+        <fn-healthCheck PURPOSE="Run a health check against the ocserv service" />
+        <fn-validateConfig PURPOSE="Validate ocserv config before reload" />
+        <fn-reloadService PURPOSE="Reload ocserv with structured result reporting" />
+        <fn-safeReload PURPOSE="Validate first, reload only on success" />
+        <fn-serializeCommandResult PURPOSE="Convert command result to JSON-safe data" />
+      </annotations>
+    </M-ADAPTER-COMMANDS>
+
+    <M-ADAPTER-TEMPLATES NAME="adapter_templates" TYPE="INTEGRATION" STATUS="implemented">
+      <purpose>Render and synchronize managed ocserv configuration templates for main config and policy groups.</purpose>
+      <path>src/adapter_templates.py</path>
+      <depends>M-OCSERV-ADAPTER</depends>
+      <verification-ref>V-M-OCSERV-ADAPTER</verification-ref>
+      <annotations>
+        <fn-render_managed_files PURPOSE="Render all managed config files from templates" />
+        <fn-sync_managed_files PURPOSE="Synchronize managed files for a given action scope" />
+        <fn-ensure_default_templates PURPOSE="Ensure default templates exist for planned groups" />
+      </annotations>
+    </M-ADAPTER-TEMPLATES>
+
+    <M-ADAPTER-MUTATIONS NAME="adapter_mutations" TYPE="INTEGRATION" STATUS="implemented">
+      <purpose>Deterministic mutation pipeline — preflight, snapshot, mutate, validate, activate, verify, rollback.</purpose>
+      <path>src/adapter_mutations.py</path>
+      <depends>M-OCSERV-ADAPTER, M-ADAPTER-COMMANDS, M-ADAPTER-TEMPLATES, M-AUDIT-LOG</depends>
+      <verification-ref>V-M-OCSERV-ADAPTER</verification-ref>
+      <annotations>
+        <fn-inventoryConfig PURPOSE="Inventory managed config, auth, group templates, and user-group mapping" />
+        <fn-preflightMutation PURPOSE="Validate mutation preconditions and deterministic write scope" />
+        <fn-applyManagedMutation PURPOSE="Apply mutate -> validate -> reload -> verify with rollback" />
+        <fn-activateService PURPOSE="Validate config, choose reload or restart, activate safely" />
+        <fn-verifyMutation PURPOSE="Post-mutation verification of expected state" />
+        <fn-rollbackLastChange PURPOSE="Restore config from last rollback snapshot" />
+        <fn-serializeActivationResult PURPOSE="Convert activation evidence to JSON-safe data" />
+      </annotations>
+    </M-ADAPTER-MUTATIONS>
 
     <M-USER-LIFECYCLE NAME="user_lifecycle_manager" TYPE="CORE_LOGIC" STATUS="implemented">
       <purpose>Own VPN identity creation, disablement, removal, and existence checks against the chosen ocserv auth backend.</purpose>
@@ -181,5 +227,12 @@
     <CrossLink from="M-SAFETY-CONTROLS" to="M-AUDIT-LOG" relation="records rejected and confirmed actions with" />
     <CrossLink from="M-CONFIRMATION-STATE" to="M-AUDIT-LOG" relation="records confirmation lifecycle events with" />
     <CrossLink from="M-OCSERV-ADAPTER" to="M-AUDIT-LOG" relation="emits system action outcomes through" />
+    <CrossLink from="M-ADAPTER-COMMANDS" to="M-OCSERV-ADAPTER" relation="uses core types and command helpers from" />
+    <CrossLink from="M-ADAPTER-COMMANDS" to="M-AUDIT-LOG" relation="records command execution events with" />
+    <CrossLink from="M-ADAPTER-TEMPLATES" to="M-OCSERV-ADAPTER" relation="uses path resolution and user data helpers from" />
+    <CrossLink from="M-ADAPTER-MUTATIONS" to="M-OCSERV-ADAPTER" relation="uses core types, file I/O, and validation from" />
+    <CrossLink from="M-ADAPTER-MUTATIONS" to="M-ADAPTER-COMMANDS" relation="delegates service commands to" />
+    <CrossLink from="M-ADAPTER-MUTATIONS" to="M-ADAPTER-TEMPLATES" relation="delegates template rendering and sync to" />
+    <CrossLink from="M-ADAPTER-MUTATIONS" to="M-AUDIT-LOG" relation="records mutation lifecycle events with" />
   </Project>
 </KnowledgeGraph>
