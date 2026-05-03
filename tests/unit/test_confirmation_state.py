@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 
 from src.audit_log import AuditSink
-from src.confirmation_state import InMemoryConfirmationStore, PendingConfirmationRequest, createPendingConfirmation, resolvePendingConfirmation
+from src.confirmation_state import FileBackedConfirmationStore, InMemoryConfirmationStore, PendingConfirmationRequest, createPendingConfirmation, resolvePendingConfirmation
 
 
 class ConfirmationStateTests(unittest.TestCase):
@@ -58,6 +58,28 @@ class ConfirmationStateTests(unittest.TestCase):
         if stored is None:
             self.fail("pending confirmation record should remain available")
         self.assertEqual(stored.status, "pending")
+
+    def test_file_backed_store_persists_confirmed_status_after_reload(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "confirmations.json"
+            store = FileBackedConfirmationStore(path)
+            pending = createPendingConfirmation(
+                store,
+                PendingConfirmationRequest(action="delete_user", actor_id="admin", target_user="alice", request_id="req-4"),
+            )
+
+            resolution = resolvePendingConfirmation(store, pending.token, "confirm")
+            self.assertTrue(resolution.execute_allowed)
+
+            reloaded_store = FileBackedConfirmationStore(path)
+            reloaded_record = reloaded_store.get(pending.token)
+            if reloaded_record is None:
+                self.fail("confirmed record should persist in file-backed store")
+            self.assertEqual(reloaded_record.status, "confirmed")
+
+            replay = resolvePendingConfirmation(reloaded_store, pending.token, "confirm")
+            self.assertFalse(replay.execute_allowed)
+            self.assertEqual(replay.error_code, "CONFIRMATION_REPLAYED")
 
 
 if __name__ == "__main__":

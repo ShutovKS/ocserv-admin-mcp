@@ -78,6 +78,9 @@ class InMemoryConfirmationStore:
     def get(self, token: str) -> PendingConfirmation | None:
         return self._records.get(token)
 
+    def update(self, record: PendingConfirmation) -> None:
+        self._records[record.token] = record
+
 
 class FileBackedConfirmationStore:
     """Persistent confirmation store backed by a JSON file in the runtime directory."""
@@ -142,11 +145,17 @@ class FileBackedConfirmationStore:
     def get(self, token: str) -> PendingConfirmation | None:
         return self._records.get(token)
 
+    def update(self, record: PendingConfirmation) -> None:
+        self._records[record.token] = record
+        self._flush()
+
 
 class ConfirmationStore(Protocol):
     def put(self, record: PendingConfirmation) -> None: ...
 
     def get(self, token: str) -> PendingConfirmation | None: ...
+
+    def update(self, record: PendingConfirmation) -> None: ...
 
 
 # START_CONTRACT: createPendingConfirmation
@@ -218,14 +227,17 @@ def resolvePendingConfirmation(
         resolution = ConfirmationResolution(token, "replayed", False, "CONFIRMATION_REPLAYED", action=record.action, target_user=record.target_user, target_group=record.target_group)
     elif current_time > record.expires_at:
         record.status = "expired"
+        store.update(record)
         resolution = ConfirmationResolution(token, "expired", False, "CONFIRMATION_EXPIRED", action=record.action, target_user=record.target_user, target_group=record.target_group)
     elif requested_actor_id is not None and record.actor_id != requested_actor_id:
         resolution = ConfirmationResolution(token, "rejected", False, "UNAUTHORIZED_OPERATOR", action=record.action, target_user=record.target_user, target_group=record.target_group)
     elif decision == "cancel":
         record.status = "cancelled"
+        store.update(record)
         resolution = ConfirmationResolution(token, "cancelled", False, action=record.action, target_user=record.target_user, target_group=record.target_group)
     else:
         record.status = "confirmed"
+        store.update(record)
         resolution = ConfirmationResolution(token, "confirmed", True, action=record.action, target_user=record.target_user, target_group=record.target_group)
 
     recordAuditEvent(
