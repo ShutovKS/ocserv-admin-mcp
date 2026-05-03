@@ -25,7 +25,7 @@ import json
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 from uuid import uuid4
 
 from src.audit_log import AuditSink, recordAuditEvent
@@ -143,6 +143,12 @@ class FileBackedConfirmationStore:
         return self._records.get(token)
 
 
+class ConfirmationStore(Protocol):
+    def put(self, record: PendingConfirmation) -> None: ...
+
+    def get(self, token: str) -> PendingConfirmation | None: ...
+
+
 # START_CONTRACT: createPendingConfirmation
 #   PURPOSE: Create a pending confirmation record for a destructive action.
 #   INPUTS: { store: InMemoryConfirmationStore - confirmation store, request: PendingConfirmationRequest - pending request, audit_sink: AuditSink | None - audit destination, now: datetime | None - override for deterministic tests }
@@ -151,7 +157,7 @@ class FileBackedConfirmationStore:
 #   LINKS: [resolvePendingConfirmation]
 # END_CONTRACT: createPendingConfirmation
 def createPendingConfirmation(
-    store: InMemoryConfirmationStore,
+    store: ConfirmationStore,
     request: PendingConfirmationRequest,
     audit_sink: AuditSink | None = None,
     now: datetime | None = None,
@@ -196,7 +202,7 @@ def createPendingConfirmation(
 #   LINKS: [createPendingConfirmation]
 # END_CONTRACT: resolvePendingConfirmation
 def resolvePendingConfirmation(
-    store: InMemoryConfirmationStore,
+    store: ConfirmationStore,
     token: str,
     decision: str,
     audit_sink: AuditSink | None = None,

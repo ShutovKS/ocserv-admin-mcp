@@ -23,10 +23,11 @@ import argparse
 from dataclasses import asdict, dataclass
 import json
 import os
+import shlex
 import signal
 import time as _time
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Protocol
 from uuid import uuid4
 from wsgiref.simple_server import make_server
 
@@ -66,6 +67,12 @@ class AdminApiConfig:
 
 
 SERVER_VERSION = "0.1.0"
+
+
+class ConfirmationStore(Protocol):
+    def put(self, record: PendingConfirmation) -> None: ...
+
+    def get(self, token: str) -> PendingConfirmation | None: ...
 
 
 def _json_response(status: str, payload: dict[str, Any]) -> tuple[str, list[tuple[str, str]], bytes]:
@@ -131,7 +138,7 @@ class _ActionContext:
     actor: OperatorIdentity
     decision: Any
     validated_payload: dict[str, Any]
-    store: InMemoryConfirmationStore
+    store: ConfirmationStore
 
 
 def _handle_list_users(ctx: _ActionContext) -> dict[str, Any]:
@@ -314,7 +321,7 @@ def executeApprovedAction(
     payload: dict[str, Any],
     actor: OperatorIdentity,
     config: AdminApiConfig,
-    store: InMemoryConfirmationStore,
+    store: ConfirmationStore,
     *,
     confirmed_from_token: bool = False,
 ) -> dict[str, Any]:
@@ -434,10 +441,13 @@ def _normalize_expected_confirmation_value(value: Any) -> str | None:
     return normalized
 
 
-def _build_confirmation_store(config: AdminApiConfig) -> InMemoryConfirmationStore | FileBackedConfirmationStore:
+def _build_confirmation_store(config: AdminApiConfig) -> ConfirmationStore:
     store_type = os.environ.get("OCSERV_ADMIN_CONFIRMATION_STORE", "memory")
     if store_type == "file":
-        store_path = config.paths.rollback_state_file.parent / "confirmations.json"
+        rollback_state_file = config.paths.rollback_state_file
+        if rollback_state_file is None:
+            raise RuntimeError("OCSERV_ADMIN_ROLLBACK_STATE_FILE_MISSING")
+        store_path = rollback_state_file.parent / "confirmations.json"
         return FileBackedConfirmationStore(store_path)
     return InMemoryConfirmationStore()
 
@@ -545,26 +555,34 @@ def serve(config: AdminApiConfig) -> None:
 
 
 def ensure_runtime_dirs(config: AdminApiConfig) -> None:
-    runtime = config.paths.rollback_state_file.parent
+    rollback_state_file = config.paths.rollback_state_file
+    if rollback_state_file is None:
+        raise RuntimeError("OCSERV_ADMIN_ROLLBACK_STATE_FILE_MISSING")
+    runtime = rollback_state_file.parent
     runtime.mkdir(parents=True, exist_ok=True)
     if not config.paths.groups_file.exists() and config.paths.groups_file.suffix == ".json":
         config.paths.groups_file.parent.mkdir(parents=True, exist_ok=True)
         config.paths.groups_file.write_text(json.dumps({"groups": ["default", "admins"]}, indent=2) + "\n", encoding="utf-8")
 
 
+def _parse_command(value: str) -> tuple[str, ...]:
+    return tuple(shlex.split(value))
+
+
 def build_config_from_env(runtime_root: Path | None = None) -> AdminApiConfig:
     runtime = runtime_root or Path(os.environ.get("OCSERV_ADMIN_RUNTIME_DIR", str(DEFAULT_RUNTIME_DIR)))
+    read_limit_raw = os.environ.get("OCSERV_ADMIN_RATE_LIMIT_READ_MAX_REQUESTS")
     paths = OcservPaths(
         users_file=Path(os.environ.get("OCSERV_ADMIN_USERS_FILE", str(DEFAULT_USERS_FILE if runtime_root is None else runtime / "users.json"))),
         groups_file=Path(os.environ.get("OCSERV_ADMIN_GROUPS_FILE", str(runtime / "groups.json"))),
         audit_log_file=Path(os.environ.get("OCSERV_ADMIN_AUDIT_LOG_FILE", str(DEFAULT_AUDIT_LOG_FILE))),
-        command_prefix=tuple(os.environ.get("OCSERV_ADMIN_COMMAND_PREFIX", "sudo -n").split()) if os.environ.get("OCSERV_ADMIN_COMMAND_PREFIX", "sudo -n") else (),
+        command_prefix=_parse_command(os.environ.get("OCSERV_ADMIN_COMMAND_PREFIX", "sudo -n")) if os.environ.get("OCSERV_ADMIN_COMMAND_PREFIX", "sudo -n") else (),
         ocpasswd_bin=os.environ.get("OCSERV_ADMIN_OCPASSWD_BIN", "/usr/bin/ocpasswd"),
         occtl_bin=os.environ.get("OCSERV_ADMIN_OCCTL_BIN", "/usr/bin/occtl"),
-        validate_command=tuple(os.environ.get("OCSERV_ADMIN_VALIDATE_COMMAND", DEFAULT_VALIDATE_COMMAND).split()),
-        reload_command=tuple(os.environ.get("OCSERV_ADMIN_RELOAD_COMMAND", "systemctl reload ocserv").split()),
-        restart_command=tuple(os.environ.get("OCSERV_ADMIN_RESTART_COMMAND", "systemctl restart ocserv").split()),
-        healthcheck_command=tuple(os.environ.get("OCSERV_ADMIN_HEALTHCHECK_COMMAND", "systemctl is-active ocserv").split()),
+        validate_command=_parse_command(os.environ.get("OCSERV_ADMIN_VALIDATE_COMMAND", DEFAULT_VALIDATE_COMMAND)),
+        reload_command=_parse_command(os.environ.get("OCSERV_ADMIN_RELOAD_COMMAND", "systemctl reload ocserv")),
+        restart_command=_parse_command(os.environ.get("OCSERV_ADMIN_RESTART_COMMAND", "systemctl restart ocserv")),
+        healthcheck_command=_parse_command(os.environ.get("OCSERV_ADMIN_HEALTHCHECK_COMMAND", "systemctl is-active ocserv")),
         main_config_file=Path(os.environ.get("OCSERV_ADMIN_MAIN_CONFIG_FILE", str(DEFAULT_MAIN_CONFIG_FILE if runtime_root is None else runtime / "ocserv.conf"))),
         main_config_template=Path(os.environ.get("OCSERV_ADMIN_MAIN_CONFIG_TEMPLATE", str(DEFAULT_MAIN_CONFIG_TEMPLATE if runtime_root is None else runtime / "templates" / "ocserv.conf.tpl"))),
         group_config_dir=Path(os.environ.get("OCSERV_ADMIN_GROUP_CONFIG_DIR", str(DEFAULT_GROUP_CONFIG_DIR if runtime_root is None else runtime / "groups.d"))),
@@ -587,7 +605,7 @@ def build_config_from_env(runtime_root: Path | None = None) -> AdminApiConfig:
         paths=paths,
         rate_limit_max_requests=int(os.environ.get("OCSERV_ADMIN_RATE_LIMIT_MAX_REQUESTS", "20")),
         rate_limit_window_seconds=int(os.environ.get("OCSERV_ADMIN_RATE_LIMIT_WINDOW_SECONDS", "60")),
-        rate_limit_read_max_requests=int(os.environ.get("OCSERV_ADMIN_RATE_LIMIT_READ_MAX_REQUESTS")) if os.environ.get("OCSERV_ADMIN_RATE_LIMIT_READ_MAX_REQUESTS") else None,
+        rate_limit_read_max_requests=int(read_limit_raw) if read_limit_raw else None,
     )
 
 
