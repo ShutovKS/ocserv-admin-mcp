@@ -451,5 +451,9 @@ def build_config_from_env(runtime_root: Path | None = None) -> AdminApiConfig:
     )
 
 
-if __name__ == "__main__":
+def main() -> None:
     serve(build_config_from_env())
+
+
+if __name__ == "__main__":
+    main()

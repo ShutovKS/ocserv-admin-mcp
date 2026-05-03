@@ -20,6 +20,7 @@ Environment=OCSERV_ADMIN_GROUP_TEMPLATE_DIR=/var/lib/ocserv-admin/group-template
 Environment=OCSERV_ADMIN_USER_GROUP_MAP_FILE=/var/lib/ocserv-admin/user-groups.json
 EnvironmentFile=/etc/ocserv-admin/ocserv-admin.env
 ExecStart=/usr/bin/python3 -m src.ocserv_admin_api
+# Or if installed via pip: ExecStart=ocserv-admin-api
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
