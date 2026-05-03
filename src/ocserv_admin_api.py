@@ -74,6 +74,8 @@ class ConfirmationStore(Protocol):
 
     def get(self, token: str) -> PendingConfirmation | None: ...
 
+    def update(self, record: PendingConfirmation) -> None: ...
+
 
 def _json_response(status: str, payload: dict[str, Any]) -> tuple[str, list[tuple[str, str]], bytes]:
     body = json.dumps(payload, sort_keys=True).encode("utf-8")
