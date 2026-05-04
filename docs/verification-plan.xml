@@ -67,6 +67,63 @@
         <trace-sequence>BLOCK_PLAN_ACTION -&gt; BLOCK_CREATE_PENDING_CONFIRMATION -&gt; BLOCK_RESOLVE_PENDING_CONFIRMATION -&gt; BLOCK_EXECUTE_APPROVED_ACTION -&gt; BLOCK_RENDER_POLICY_CHANGES -&gt; BLOCK_VALIDATE_CONFIG -&gt; BLOCK_SAFE_RELOAD</trace-sequence>
       </required-signals>
     </VF-ASSIGN-GROUP>
+    <VF-LIST-GROUPS NAME="ListManagedPolicyGroups" USE_CASES="UC-004" DATA_FLOW="DF-LIST-GROUPS" PRIORITY="high">
+      <scenario>Operator requests the current managed ocserv policy groups and membership evidence.</scenario>
+      <expected-outcome>Group listing returns configured groups with stable membership, route, and IPv4 pool details without mutating user or policy files.</expected-outcome>
+      <evidence-provenance>Deterministic group-list result assertions, inventory evidence, and read-only file-state checks.</evidence-provenance>
+      <required-signals>
+        <log-marker>[OcservAdapter][listGroups][BLOCK_LIST_GROUPS]</log-marker>
+        <trace-sequence>BLOCK_EXECUTE_APPROVED_ACTION -&gt; BLOCK_LIST_GROUPS -&gt; BLOCK_RECORD_AUDIT_EVENT</trace-sequence>
+      </required-signals>
+    </VF-LIST-GROUPS>
+    <VF-SHOW-USER-IPS NAME="ShowUserIpAssignments" USE_CASES="UC-006" DATA_FLOW="DF-SHOW-USER-IPS" PRIORITY="high">
+      <scenario>Operator requests visible VPN user IP assignments through the public MCP surface.</scenario>
+      <expected-outcome>User IP listing reflects current occtl-visible session state or parsed tabular session output and returns stable username, group, IP, and session evidence.</expected-outcome>
+      <evidence-provenance>Structured occtl parse assertions, deterministic returned-record checks, and read-only execution evidence.</evidence-provenance>
+      <required-signals>
+        <log-marker>[OcservAdapter][showUserIps][BLOCK_SHOW_USER_IPS]</log-marker>
+        <trace-sequence>BLOCK_EXECUTE_APPROVED_ACTION -&gt; BLOCK_SHOW_USER_IPS -&gt; BLOCK_RECORD_AUDIT_EVENT</trace-sequence>
+      </required-signals>
+    </VF-SHOW-USER-IPS>
+    <VF-UPDATE-USER-IP NAME="UpdateUserStaticIp" USE_CASES="UC-006" DATA_FLOW="DF-UPDATE-USER-IP" PRIORITY="high">
+      <scenario>Operator updates a managed user's static IPv4 assignment.</scenario>
+      <expected-outcome>Invalid, duplicate, or out-of-pool IPv4 assignments are rejected; a valid assignment updates only the intended user metadata/config and returns sanitized user evidence.</expected-outcome>
+      <evidence-provenance>Deterministic IPv4 validation assertions, scoped file-diff evidence, user-config sync evidence, and post-action user-state rechecks.</evidence-provenance>
+      <required-signals>
+        <log-marker>[OcservAdapter][_validate_user_ipv4_address][BLOCK_VALIDATE_USER_IPV4_ADDRESS]</log-marker>
+        <log-marker>[OcservAdapter][updateUserIpRecord][BLOCK_UPDATE_USER_IP_MUTATION]</log-marker>
+        <trace-sequence>BLOCK_EXECUTE_APPROVED_ACTION -&gt; BLOCK_VALIDATE_USER_IPV4_ADDRESS -&gt; BLOCK_UPDATE_USER_IP_MUTATION -&gt; BLOCK_SYNC_USER_CONFIG -&gt; BLOCK_RECORD_AUDIT_EVENT</trace-sequence>
+      </required-signals>
+    </VF-UPDATE-USER-IP>
+    <VF-DISABLE-GROUP-USERS NAME="DisableUsersInPolicyGroup" USE_CASES="UC-007" DATA_FLOW="DF-DISABLE-GROUP-USERS" PRIORITY="high">
+      <scenario>Operator requests bulk disable for all active users assigned to a policy group and the system requires explicit confirmation before mutation.</scenario>
+      <expected-outcome>Only active users in the target group are disabled, missing groups fail safely, empty groups return no affected users, and identities are never deleted.</expected-outcome>
+      <evidence-provenance>Confirmation-state transitions, deterministic target-user selection assertions, per-user disable evidence, and post-action state rechecks.</evidence-provenance>
+      <required-signals>
+        <log-marker>[ConfirmationState][resolvePendingConfirmation][BLOCK_RESOLVE_PENDING_CONFIRMATION]</log-marker>
+        <log-marker>[OcservAdapter][disableUsersInGroupRecord][BLOCK_DISABLE_GROUP_USERS_FLOW]</log-marker>
+        <trace-sequence>BLOCK_PLAN_ACTION -&gt; BLOCK_CREATE_PENDING_CONFIRMATION -&gt; BLOCK_RESOLVE_PENDING_CONFIRMATION -&gt; BLOCK_DISABLE_GROUP_USERS_FLOW -&gt; BLOCK_DISABLE_USER_MUTATION -&gt; BLOCK_RECORD_AUDIT_EVENT</trace-sequence>
+      </required-signals>
+    </VF-DISABLE-GROUP-USERS>
+    <VF-CREATE-GROUP NAME="CreateManagedPolicyGroup" USE_CASES="UC-004" DATA_FLOW="DF-CREATE-GROUP" PRIORITY="high">
+      <scenario>Operator creates a managed ocserv policy group with optional IPv4 pool and route metadata.</scenario>
+      <expected-outcome>Duplicate group creation is rejected; successful creation updates only the managed group registry/template and returns stable group details.</expected-outcome>
+      <evidence-provenance>Deterministic duplicate checks, scoped file-diff evidence, rendered template assertions, and post-action list-groups rechecks.</evidence-provenance>
+      <required-signals>
+        <log-marker>[OcservAdapter][createGroupRecord][BLOCK_CREATE_GROUP_MUTATION]</log-marker>
+        <trace-sequence>BLOCK_EXECUTE_APPROVED_ACTION -&gt; BLOCK_CREATE_GROUP_MUTATION -&gt; BLOCK_RECORD_AUDIT_EVENT</trace-sequence>
+      </required-signals>
+    </VF-CREATE-GROUP>
+    <VF-DELETE-GROUP NAME="DeleteManagedPolicyGroup" USE_CASES="UC-004" DATA_FLOW="DF-DELETE-GROUP" PRIORITY="high">
+      <scenario>Operator requests deletion of a managed ocserv policy group and the system requires explicit confirmation before removal.</scenario>
+      <expected-outcome>Protected, missing, or in-use groups fail safely; successful deletion removes only the target group record/template and leaves user assignments untouched.</expected-outcome>
+      <evidence-provenance>Confirmation-state transitions, group deletion safety assertions, scoped file-diff evidence, and post-action list-groups rechecks.</evidence-provenance>
+      <required-signals>
+        <log-marker>[ConfirmationState][resolvePendingConfirmation][BLOCK_RESOLVE_PENDING_CONFIRMATION]</log-marker>
+        <log-marker>[OcservAdapter][deleteGroupRecord][BLOCK_DELETE_GROUP_SAFETY]</log-marker>
+        <trace-sequence>BLOCK_PLAN_ACTION -&gt; BLOCK_CREATE_PENDING_CONFIRMATION -&gt; BLOCK_RESOLVE_PENDING_CONFIRMATION -&gt; BLOCK_DELETE_GROUP_SAFETY -&gt; BLOCK_DELETE_GROUP_MUTATION -&gt; BLOCK_RECORD_AUDIT_EVENT</trace-sequence>
+      </required-signals>
+    </VF-DELETE-GROUP>
     <VF-SAFE-RELOAD NAME="SafeReloadOrStop" USE_CASES="UC-005" DATA_FLOW="DF-SAFE-RELOAD" PRIORITY="high">
       <scenario>A config change requires validation and reload, and the system must stop safely on validation or reload failure.</scenario>
       <expected-outcome>Validation failure prevents reload, reload failure is surfaced clearly, service availability is preserved where possible, and an audit record captures the failure boundary.</expected-outcome>
@@ -95,7 +152,7 @@
         <file>tests/unit/test_audit_log.py</file>
       </test-files>
       <module-checks>
-        <check-1>python3 -m unittest tests.unit.test_audit_log -v</check-1>
+        <check-1>python3 -m pytest tests/unit/test_audit_log.py</check-1>
       </module-checks>
       <scenarios>
         <scenario-1 kind="success">Structured fields are emitted with required audit metadata.</scenario-1>
@@ -116,7 +173,7 @@
         <file>tests/unit/test_safety_controls.py</file>
       </test-files>
       <module-checks>
-        <check-1>python3 -m unittest tests.unit.test_safety_controls -v</check-1>
+        <check-1>python3 -m pytest tests/unit/test_safety_controls.py</check-1>
       </module-checks>
       <scenarios>
         <scenario-1 kind="success">Authorized safe actions are allowed to proceed.</scenario-1>
@@ -138,7 +195,7 @@
         <file>tests/unit/test_confirmation_state.py</file>
       </test-files>
       <module-checks>
-        <check-1>python3 -m unittest tests.unit.test_confirmation_state -v</check-1>
+        <check-1>python3 -m pytest tests/unit/test_confirmation_state.py</check-1>
       </module-checks>
       <scenarios>
         <scenario-1 kind="success">A destructive action enters pending state and resolves exactly once when confirmed.</scenario-1>
@@ -160,7 +217,7 @@
         <file>tests/unit/test_ocserv_adapter.py</file>
       </test-files>
       <module-checks>
-        <check-1>python3 -m unittest tests.unit.test_ocserv_adapter -v</check-1>
+        <check-1>python3 -m pytest tests/unit/test_ocserv_adapter.py</check-1>
       </module-checks>
       <scenarios>
         <scenario-1 kind="success">occtl command output is parsed into stable structured results, disconnect commands stay on the approved occtl surface, and the adapter inventories the managed config, auth, and mapping surfaces deterministically.</scenario-1>
@@ -185,7 +242,7 @@
         <file>tests/unit/test_user_lifecycle_manager.py</file>
       </test-files>
       <module-checks>
-        <check-1>python3 -m unittest tests.unit.test_user_lifecycle_manager -v</check-1>
+        <check-1>python3 -m pytest tests/unit/test_user_lifecycle_manager.py</check-1>
       </module-checks>
       <scenarios>
         <scenario-1 kind="success">User create, disable, and remove operations execute through the approved auth backend path with deterministic planned-file and changed-file evidence, and create-user returns a usable one-time credential handoff when the passwd-file backend is active.</scenario-1>
@@ -208,7 +265,7 @@
         <file>tests/unit/test_policy_group_manager.py</file>
       </test-files>
       <module-checks>
-        <check-1>python3 -m unittest tests.unit.test_policy_group_manager -v</check-1>
+        <check-1>python3 -m pytest tests/unit/test_policy_group_manager.py</check-1>
       </module-checks>
       <scenarios>
         <scenario-1 kind="success">Assigning a user to a group requires confirmation, updates only the intended config targets, and returns deterministic changed-file evidence.</scenario-1>
@@ -230,7 +287,7 @@
         <file>tests/unit/test_session_manager.py</file>
       </test-files>
       <module-checks>
-        <check-1>python3 -m unittest tests.unit.test_session_manager -v</check-1>
+        <check-1>python3 -m pytest tests/unit/test_session_manager.py</check-1>
       </module-checks>
       <scenarios>
         <scenario-1 kind="success">Session listing returns real structured session state parsed from occtl output and session disconnect returns deterministic command evidence.</scenario-1>
@@ -253,7 +310,7 @@
         <file>tests/integration/test_ocserv_admin_api.py</file>
       </test-files>
       <module-checks>
-        <check-1>python3 -m unittest tests.integration.test_ocserv_admin_api -v</check-1>
+        <check-1>python3 -m pytest tests/integration/test_ocserv_admin_api.py</check-1>
       </module-checks>
       <scenarios>
         <scenario-1 kind="success">Approved actions are routed to the intended backend module and return structured results, including create-user provisioning handoff for the real passwd-file backend.</scenario-1>
@@ -274,7 +331,7 @@
         <file>tests/unit/test_backend_client.py</file>
       </test-files>
       <module-checks>
-        <check-1>python3 -m unittest tests.unit.test_backend_client -v</check-1>
+        <check-1>python3 -m pytest tests/unit/test_backend_client.py</check-1>
       </module-checks>
       <scenarios>
         <scenario-1 kind="success">Approved action requests normalize deterministically to backend actions.</scenario-1>
@@ -297,13 +354,13 @@
         <file>tests/integration/test_mcp_sdk_stdio_interop.py</file>
       </test-files>
       <module-checks>
-        <check-1>python3 -m unittest tests.unit.test_mcp_server -v</check-1>
-        <check-2>python3 -m unittest tests.integration.test_mcp_server_integration -v</check-2>
-        <check-3>python3 -m unittest tests.integration.test_mcp_sdk_stdio_interop -v</check-3>
+        <check-1>python3 -m pytest tests/unit/test_mcp_server.py</check-1>
+        <check-2>python3 -m pytest tests/integration/test_mcp_server_integration.py</check-2>
+        <check-3>python3 -m pytest tests/integration/test_mcp_sdk_stdio_interop.py</check-3>
       </module-checks>
       <scenarios>
-        <scenario-1 kind="success">MCP clients discover only the approved MVP tools and each tool call routes through the localhost backend client with structured results.</scenario-1>
-        <scenario-2 kind="success">The public MCP surface can execute the MVP tool set through the approved backend path.</scenario-2>
+        <scenario-1 kind="success">MCP clients discover only the approved public tools and each tool call routes through the localhost backend client with structured results.</scenario-1>
+        <scenario-2 kind="success">The public MCP surface can execute the current tool set through the approved backend path.</scenario-2>
         <scenario-3 kind="success">Official Python SDK client sessions can initialize, list tools, and call the stdio server with structured results and MCP-layer pagination evidence.</scenario-3>
         <scenario-4 kind="failure">Unknown tools, malformed payloads, and destructive requests without confirmation never escape the strict contract.</scenario-4>
       </scenarios>
@@ -312,7 +369,7 @@
         <marker-2>[OcservAdminApi][executeApprovedAction][BLOCK_EXECUTE_APPROVED_ACTION]</marker-2>
       </required-log-markers>
       <required-trace-assertions>
-        <assertion-1>MCP-exposed tools must be limited to the approved MVP action vocabulary.</assertion-1>
+        <assertion-1>MCP-exposed tools must be limited to EXPOSED_PUBLIC_TOOLS and must not expose validate_config.</assertion-1>
         <assertion-2>Free-form tool calls must not become shell execution or direct config edits.</assertion-2>
       </required-trace-assertions>
       <execution-readiness>implemented-and-passing</execution-readiness>
@@ -323,7 +380,7 @@
 
   <PhaseGates>
     <Gate-Phase-0 PHASE="Phase-0">
-      <goal>Access-model terminology and public MCP tool vocabulary are frozen before implementation waves begin.</goal>
+      <goal>Access-model terminology and public MCP tool vocabulary match the implemented action registry before implementation waves begin.</goal>
       <covered-flows>planning-only</covered-flows>
       <commands>
         <command-1>python -c "import xml.etree.ElementTree as ET; [ET.parse(path) for path in ['docs/requirements.xml','docs/development-plan.xml','docs/knowledge-graph.xml','docs/verification-plan.xml']]"</command-1>
@@ -331,14 +388,14 @@
       <required-evidence>
         <evidence-1>Requirements, plan, graph, and verification artifacts all define user as VPN identity and group as ocserv policy group.</evidence-1>
         <evidence-2>Network-group wording is constrained to access rules or routes, not an overlay VPN abstraction.</evidence-2>
-        <evidence-3>The Phase 0 tool surface is exactly list_users, list_sessions, disconnect_session, create_user, disable_user, delete_user, assign_group, reload_service, rollback_last_change, and confirm_action.</evidence-3>
+        <evidence-3>The public tool surface is exactly list_users, list_sessions, list_groups, show_user_ips, disconnect_session, create_user, update_user_ip, disable_user, disable_group_users, delete_user, assign_group, create_group, delete_group, reload_service, rollback_last_change, and confirm_action; validate_config remains internal backend capability only.</evidence-3>
       </required-evidence>
     </Gate-Phase-0>
     <Gate-Phase-1 PHASE="Phase-1">
       <goal>Safety foundation modules have deterministic checks, redaction-safe logs, replay-safe confirmation behavior, and safe reload stop conditions.</goal>
       <covered-flows>VF-CONFIRMATION-FLOW, VF-SAFE-RELOAD</covered-flows>
       <commands>
-        <command-1>python3 -m unittest tests.unit.test_audit_log tests.unit.test_safety_controls tests.unit.test_confirmation_state tests.unit.test_ocserv_adapter -v</command-1>
+        <command-1>python3 -m pytest tests/unit/test_audit_log.py tests/unit/test_safety_controls.py tests/unit/test_confirmation_state.py tests/unit/test_ocserv_adapter.py</command-1>
       </commands>
       <required-evidence>
         <evidence-1>Audit, guard, confirmation, and reload modules expose stable markers and failure boundaries.</evidence-1>
@@ -348,32 +405,32 @@
     </Gate-Phase-1>
     <Gate-Phase-2 PHASE="Phase-2">
       <goal>Administrative core flows are deterministic and do not corrupt unrelated config or session state.</goal>
-      <covered-flows>VF-ADD-USER, VF-ASSIGN-GROUP, VF-SHOW-SESSIONS, VF-DISCONNECT-SESSION</covered-flows>
+      <covered-flows>VF-ADD-USER, VF-ASSIGN-GROUP, VF-LIST-GROUPS, VF-SHOW-USER-IPS, VF-UPDATE-USER-IP, VF-DISABLE-GROUP-USERS, VF-CREATE-GROUP, VF-DELETE-GROUP, VF-SHOW-SESSIONS, VF-DISCONNECT-SESSION</covered-flows>
       <commands>
-        <command-1>python3 -m unittest tests.unit.test_user_lifecycle_manager tests.unit.test_policy_group_manager tests.unit.test_session_manager tests.integration.test_ocserv_admin_api -v</command-1>
+        <command-1>python3 -m pytest tests/unit/test_user_lifecycle_manager.py tests/unit/test_policy_group_manager.py tests/unit/test_session_manager.py tests/integration/test_ocserv_admin_api.py</command-1>
         <command-2>Operational follow-up after repository completion: run the deployed localhost backend against real occtl, auth files, group policy files, and systemctl on the target ocserv VPS.</command-2>
       </commands>
       <required-evidence>
-        <evidence-1>User lifecycle, scoped config-change checks, deterministic file-scope evidence, and session-state verification all pass.</evidence-1>
-        <evidence-2>Required markers: BLOCK_APPLY_USER_CREATE, BLOCK_APPLY_USER_REMOVE, BLOCK_RENDER_POLICY_CHANGES, BLOCK_LIST_SESSIONS, BLOCK_EXECUTE_APPROVED_ACTION.</evidence-2>
+        <evidence-1>User lifecycle, group management, user IP management, scoped config-change checks, deterministic file-scope evidence, and session-state verification all pass.</evidence-1>
+        <evidence-2>Required markers: BLOCK_APPLY_USER_CREATE, BLOCK_APPLY_USER_REMOVE, BLOCK_RENDER_POLICY_CHANGES, BLOCK_LIST_GROUPS, BLOCK_SHOW_USER_IPS, BLOCK_VALIDATE_USER_IPV4_ADDRESS, BLOCK_UPDATE_USER_IP_MUTATION, BLOCK_DISABLE_GROUP_USERS_FLOW, BLOCK_CREATE_GROUP_MUTATION, BLOCK_DELETE_GROUP_SAFETY, BLOCK_LIST_SESSIONS, BLOCK_EXECUTE_APPROVED_ACTION.</evidence-2>
         <evidence-3>Forbidden behavior: collateral config edits outside approved scope, deletion of active users without force, and fabricated session results that do not match current occtl-visible state.</evidence-3>
-        <evidence-4>Repository-level completion requires deterministic unit/integration evidence for list_users, list_sessions, disconnect_session, create_user, disable_user, delete_user, assign_group, reload_service, rollback_last_change, and confirm_action; a later operational follow-up should preserve host-side audit and command evidence without fixture substitution.</evidence-4>
+        <evidence-4>Repository-level completion requires deterministic unit/integration evidence for list_users, list_sessions, list_groups, show_user_ips, disconnect_session, create_user, update_user_ip, disable_user, disable_group_users, delete_user, assign_group, create_group, delete_group, reload_service, rollback_last_change, and confirm_action; a later operational follow-up should preserve host-side audit and command evidence without fixture substitution.</evidence-4>
       </required-evidence>
     </Gate-Phase-2>
     <Gate-Phase-3 PHASE="Phase-3">
       <goal>Operator-facing MCP flows preserve safety controls while supporting the MVP admin package flows.</goal>
-      <covered-flows>VF-ADD-USER, VF-REMOVE-USER, VF-SHOW-SESSIONS, VF-DISCONNECT-SESSION, VF-ASSIGN-GROUP, VF-SAFE-RELOAD, VF-CONFIRMATION-FLOW</covered-flows>
+      <covered-flows>VF-ADD-USER, VF-REMOVE-USER, VF-SHOW-SESSIONS, VF-DISCONNECT-SESSION, VF-ASSIGN-GROUP, VF-LIST-GROUPS, VF-SHOW-USER-IPS, VF-UPDATE-USER-IP, VF-DISABLE-GROUP-USERS, VF-CREATE-GROUP, VF-DELETE-GROUP, VF-SAFE-RELOAD, VF-CONFIRMATION-FLOW</covered-flows>
       <commands>
-        <command-1>python3 -m unittest tests.unit.test_backend_client -v</command-1>
-        <command-2>python3 -m unittest tests.unit.test_mcp_server -v</command-2>
-        <command-3>python3 -m unittest tests.integration.test_mcp_server_integration -v</command-3>
-        <command-4>python3 -m unittest tests.integration.test_mcp_sdk_stdio_interop -v</command-4>
+        <command-1>python3 -m pytest tests/unit/test_backend_client.py</command-1>
+        <command-2>python3 -m pytest tests/unit/test_mcp_server.py</command-2>
+        <command-3>python3 -m pytest tests/integration/test_mcp_server_integration.py</command-3>
+        <command-4>python3 -m pytest tests/integration/test_mcp_sdk_stdio_interop.py</command-4>
       </commands>
       <required-evidence>
         <evidence-1>MCP-client-to-backend flows execute with stable markers, confirmation safeguards, and auditable outcomes.</evidence-1>
         <evidence-2>Required markers: BLOCK_PLAN_ACTION and BLOCK_EXECUTE_APPROVED_ACTION, plus all flow-specific markers declared in the covered flows that are already implemented.</evidence-2>
         <evidence-3>Forbidden behavior: MCP clients bypassing the backend, malformed action requests, or unconfirmed destructive actions reaching backend execution.</evidence-3>
-        <evidence-4>The MCP tool surface exposes only the approved MVP actions and blocks arbitrary shell-like operations.</evidence-4>
+        <evidence-4>The MCP tool surface exposes exactly the current approved public actions, excludes validate_config, and blocks arbitrary shell-like operations.</evidence-4>
         <evidence-5>Workspace instructions and operator-surface config bind client flows to backend tools rather than direct shell or config edits.</evidence-5>
       </required-evidence>
     </Gate-Phase-3>

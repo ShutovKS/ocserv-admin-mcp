@@ -24,11 +24,17 @@
     <PublicToolSurface>
       <tool-list_users maps-to="M-MCP-SERVER,M-BACKEND-CLIENT,M-USER-LIFECYCLE" />
       <tool-list_sessions maps-to="M-MCP-SERVER,M-BACKEND-CLIENT,M-SESSION-MANAGER" />
+      <tool-list_groups maps-to="M-MCP-SERVER,M-BACKEND-CLIENT,M-POLICY-GROUP-MANAGER,M-OCSERV-ADAPTER" />
+      <tool-show_user_ips maps-to="M-MCP-SERVER,M-BACKEND-CLIENT,M-OCSERV-ADAPTER,M-SESSION-MANAGER" />
       <tool-disconnect_session maps-to="M-MCP-SERVER,M-BACKEND-CLIENT,M-CONFIRMATION-STATE,M-SESSION-MANAGER,M-SAFETY-CONTROLS,M-OCSERV-ADAPTER" />
       <tool-create_user maps-to="M-MCP-SERVER,M-BACKEND-CLIENT,M-USER-LIFECYCLE,M-POLICY-GROUP-MANAGER,M-OCSERV-ADAPTER" />
+      <tool-update_user_ip maps-to="M-MCP-SERVER,M-BACKEND-CLIENT,M-USER-LIFECYCLE,M-OCSERV-ADAPTER,M-ADAPTER-MUTATIONS" />
       <tool-disable_user maps-to="M-MCP-SERVER,M-BACKEND-CLIENT,M-USER-LIFECYCLE,M-SAFETY-CONTROLS" />
+      <tool-disable_group_users maps-to="M-MCP-SERVER,M-BACKEND-CLIENT,M-CONFIRMATION-STATE,M-POLICY-GROUP-MANAGER,M-USER-LIFECYCLE,M-SAFETY-CONTROLS,M-OCSERV-ADAPTER" />
       <tool-delete_user maps-to="M-MCP-SERVER,M-BACKEND-CLIENT,M-CONFIRMATION-STATE,M-USER-LIFECYCLE,M-SAFETY-CONTROLS" />
       <tool-assign_group maps-to="M-MCP-SERVER,M-BACKEND-CLIENT,M-POLICY-GROUP-MANAGER,M-OCSERV-ADAPTER" />
+      <tool-create_group maps-to="M-MCP-SERVER,M-BACKEND-CLIENT,M-POLICY-GROUP-MANAGER,M-OCSERV-ADAPTER" />
+      <tool-delete_group maps-to="M-MCP-SERVER,M-BACKEND-CLIENT,M-CONFIRMATION-STATE,M-POLICY-GROUP-MANAGER,M-SAFETY-CONTROLS,M-OCSERV-ADAPTER" />
       <tool-reload_service maps-to="M-MCP-SERVER,M-BACKEND-CLIENT,M-OCSERV-ADAPTER,M-SAFETY-CONTROLS" />
       <tool-rollback_last_change maps-to="M-MCP-SERVER,M-BACKEND-CLIENT,M-CONFIRMATION-STATE,M-SAFETY-CONTROLS,M-OCSERV-ADAPTER" />
       <tool-confirm_action maps-to="M-MCP-SERVER,M-BACKEND-CLIENT,M-CONFIRMATION-STATE,M-SAFETY-CONTROLS" />
@@ -90,10 +96,15 @@
         <type-SystemCommandResult PURPOSE="Structured subprocess result" />
         <fn-loadUsers PURPOSE="Return canonical file-backed users" />
         <fn-listGroups PURPOSE="List allowed groups with membership details" />
+        <fn-showUserIps PURPOSE="Show observed VPN IP assignments from active occtl session state" />
         <fn-createUserRecord PURPOSE="Create a file-backed user" />
         <fn-deleteUserRecord PURPOSE="Delete a file-backed user" />
         <fn-disableUserRecord PURPOSE="Disable an existing user" />
         <fn-assignGroupRecord PURPOSE="Update a user policy group safely" />
+        <fn-updateUserIpRecord PURPOSE="Update a managed user's static IPv4 assignment" />
+        <fn-createGroupRecord PURPOSE="Create a managed policy group record and template" />
+        <fn-deleteGroupRecord PURPOSE="Delete an unused managed policy group record and template" />
+        <fn-disableUsersInGroupRecord PURPOSE="Disable active users assigned to a policy group" />
       </annotations>
     </M-OCSERV-ADAPTER>
 

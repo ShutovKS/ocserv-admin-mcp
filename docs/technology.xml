@@ -1,6 +1,6 @@
 <TechnologyStack VERSION="0.3.0">
-  <Runtime>CPython 3.12 under systemd on a Linux VPS</Runtime>
-  <Language>Python 3.12</Language>
+  <Runtime>CPython 3.11 or newer under systemd on a Linux VPS</Runtime>
+  <Language>Python 3.11+ with tooling pinned to the py311 compatibility surface</Language>
   <Framework>WSGI over the Python standard library for the localhost admin API, with MCP-capable clients calling the backend over authenticated loopback HTTP and using a local MCP stdio server for the approved tool surface.</Framework>
 
   <Dependencies>
@@ -14,27 +14,29 @@
   </Dependencies>
 
   <VersionConstraints>
-    <constraint lib="python" min="3.12.0" max="3.12.x" reason="Implementation should target Python 3.12 semantics and typing surface." />
+    <constraint lib="python" min="3.11.0" max="3.x" reason="pyproject.toml declares requires-python &gt;=3.11, ruff targets py311, and mypy checks against Python 3.11 semantics." />
   </VersionConstraints>
 
   <Tooling>
-    <tool name="test-runner" value="python -m unittest" version="builtin" />
-    <tool name="assertion-style" value="unittest assertions" version="builtin" />
+    <tool name="test-runner" value="pytest" version="project dev dependency" />
+    <tool name="lint" value="ruff" version="project dev dependency; target-version py311" />
+    <tool name="typecheck" value="mypy" version="project dev dependency; python_version 3.11; strict=true" />
+    <tool name="legacy-test-entrypoints" value="python -m unittest where retained by existing tests" version="builtin compatibility" />
     <tool name="process-supervisor" value="systemd" version="system-managed" />
     <tool name="service-control" value="occtl, systemctl, sudo" version="system-managed" />
   </Tooling>
 
   <Testing>
     <module-level>
-      <command>python3 -m unittest discover -s tests/unit -v</command>
-      <focus>Fast deterministic unit and contract checks for adapters, action validation, guard logic, and the MCP server.</focus>
+      <command>python3 -m pytest tests/unit</command>
+      <focus>Fast deterministic unit and contract checks for adapters, action validation, guard logic, and the MCP server, with unittest-style test cases allowed where they are executed by pytest.</focus>
     </module-level>
     <wave-level>
-      <command>python3 -m unittest discover -s tests/integration -v</command>
+      <command>python3 -m pytest tests/integration</command>
       <focus>Integration checks for merged surfaces such as MCP-to-backend routing and ocserv control flows.</focus>
     </wave-level>
     <phase-level>
-      <command>python3 -m unittest discover -s tests -v</command>
+      <command>python3 -m pytest tests</command>
       <focus>Broader regression confidence across user, group, session, reload, and rollback paths.</focus>
     </phase-level>
     <mocking-policy>Mock subprocess and system calls narrowly, use temp directories for config rendering tests, and prefer narrow fake adapters or local app clients over broad monkeypatching.</mocking-policy>
