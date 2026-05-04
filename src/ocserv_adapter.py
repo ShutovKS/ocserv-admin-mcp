@@ -254,6 +254,7 @@ def _load_plain_user_payload(passwd_file: Path, audit_sink: AuditSink | None = N
     users: dict[str, dict[str, Any]] = {}
     if not passwd_file.exists():
         return users
+    # START_BLOCK_LOAD_PLAIN_USER_PAYLOAD
     for line_number, raw_line in enumerate(passwd_file.read_text(encoding="utf-8").splitlines(), start=1):
         line = raw_line.strip()
         if not line:
@@ -278,16 +279,19 @@ def _load_plain_user_payload(passwd_file: Path, audit_sink: AuditSink | None = N
             "disabled": password_hash.startswith("!"),
             "password_hash": password_hash,
         }
+    # END_BLOCK_LOAD_PLAIN_USER_PAYLOAD
     return users
 
 
 def _save_plain_user_payload(passwd_file: Path, users: dict[str, dict[str, Any]]) -> None:
+    # START_BLOCK_SAVE_PLAIN_USER_PAYLOAD
     passwd_file.parent.mkdir(parents=True, exist_ok=True)
     lines: list[str] = []
     for username in sorted(users):
         record = users[username]
         lines.append(f"{username}:{record.get('group') or ''}:{record['password_hash']}")
     passwd_file.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
+    # END_BLOCK_SAVE_PLAIN_USER_PAYLOAD
 
 
 def _load_user_metadata(paths: OcservPaths) -> tuple[dict[str, str], dict[str, str]]:
@@ -324,11 +328,14 @@ def _save_user_metadata(paths: OcservPaths, assignments: dict[str, str], ipv4_ad
 def _load_user_payload(paths: OcservPaths) -> dict[str, dict[str, Any]]:
     metadata_assignments, metadata_ipv4_addresses = _load_user_metadata(paths)
     if not _uses_json_user_store(paths.users_file):
+        # START_BLOCK_LOAD_USER_PAYLOAD_PLAIN_STORE
         users = _load_plain_user_payload(paths.users_file)
         for username, address in metadata_ipv4_addresses.items():
             if username in users:
                 users[username]["ipv4_address"] = address
+        # END_BLOCK_LOAD_USER_PAYLOAD_PLAIN_STORE
         return users
+    # START_BLOCK_LOAD_USER_PAYLOAD_JSON_STORE
     payload = _read_json(paths.users_file, {"users": []})
     users: dict[str, dict[str, Any]] = {}
     for record in payload.get("users", []):
@@ -343,14 +350,19 @@ def _load_user_payload(paths: OcservPaths) -> dict[str, dict[str, Any]]:
                 "disabled": bool(record.get("disabled", False)),
                 "ipv4_address": ipv4_address,
             }
+    # END_BLOCK_LOAD_USER_PAYLOAD_JSON_STORE
     return users
 
 
 def _save_user_payload(paths: OcservPaths, users: dict[str, dict[str, Any]]) -> None:
     if not _uses_json_user_store(paths.users_file):
+        # START_BLOCK_SAVE_USER_PAYLOAD_PLAIN_STORE
         _save_plain_user_payload(paths.users_file, users)
+        # END_BLOCK_SAVE_USER_PAYLOAD_PLAIN_STORE
         return
+    # START_BLOCK_SAVE_USER_PAYLOAD_JSON_STORE
     _write_json(paths.users_file, {"users": sorted(users.values(), key=lambda item: item["username"])})
+    # END_BLOCK_SAVE_USER_PAYLOAD_JSON_STORE
 
 
 def _load_user_group_map(paths: OcservPaths, users: dict[str, dict[str, Any]] | None = None) -> dict[str, str]:
@@ -409,12 +421,14 @@ def _render_user_config(ipv4_address: str) -> str:
 
 
 def _sync_user_config(paths: OcservPaths, username: str, ipv4_address: str | None) -> None:
+    # START_BLOCK_SYNC_USER_CONFIG
     config_path = _user_config_path(paths, username)
     if ipv4_address:
         config_path.parent.mkdir(parents=True, exist_ok=True)
         config_path.write_text(_render_user_config(ipv4_address), encoding="utf-8")
     elif config_path.exists():
         config_path.unlink()
+    # END_BLOCK_SYNC_USER_CONFIG
 
 
 # --- IP validation ---
@@ -453,6 +467,7 @@ def _validate_user_ipv4_address(
 ) -> str | None:
     if ipv4_address is None:
         return None
+    # START_BLOCK_VALIDATE_USER_IPV4_ADDRESS
     try:
         address = ipaddress.ip_address(ipv4_address)
     except ValueError as error:
@@ -473,6 +488,7 @@ def _validate_user_ipv4_address(
         raise ValueError("IP_OUTSIDE_GROUP_POOL")
     if address == network.network_address or (network.num_addresses > 2 and address == network.broadcast_address):
         raise ValueError("IP_OUTSIDE_GROUP_POOL")
+    # END_BLOCK_VALIDATE_USER_IPV4_ADDRESS
     return ipv4_address
 
 
@@ -484,6 +500,7 @@ def loadUsers(paths: OcservPaths) -> list[dict[str, Any]]:
 
 
 def listGroups(paths: OcservPaths) -> list[dict[str, Any]]:
+    # START_BLOCK_LIST_GROUPS
     from src.adapter_mutations import inventoryConfig
     inventory = inventoryConfig(paths)
     assignments = inventory["user_group_assignments"]
@@ -499,6 +516,7 @@ def listGroups(paths: OcservPaths) -> list[dict[str, Any]]:
             "member_count": len(members),
             "members": members,
         })
+    # END_BLOCK_LIST_GROUPS
     return groups
 
 
@@ -508,6 +526,7 @@ def showUserIps(
     request_id: str = "unknown-request",
     actor_id: str = "unknown-actor",
 ) -> list[dict[str, Any]]:
+    # START_BLOCK_SHOW_USER_IPS
     from src.adapter_commands import runOcctl
     sessions = runOcctl(paths, "show_sessions", audit_sink, request_id, actor_id)
     if sessions and "ip" not in sessions[0] and "vpn_ip" not in sessions[0] and "status" in sessions[0]:
@@ -544,12 +563,14 @@ def showUserIps(
                 "session": session,
             }
         )
+    # END_BLOCK_SHOW_USER_IPS
     return user_ips
 
 
 # --- CRUD record operations ---
 
 def createUserRecord(paths: OcservPaths, username: str, group: str | None, ipv4_address: str | None = None) -> dict[str, Any]:
+    # START_BLOCK_CREATE_USER_PREPARE
     users = _load_user_payload(paths)
     assignments = _load_user_group_map(paths, users)
     ipv4_addresses = _load_user_ipv4_map(paths, users)
@@ -558,7 +579,9 @@ def createUserRecord(paths: OcservPaths, username: str, group: str | None, ipv4_
     if group is not None and group not in listAllowedGroups(paths):
         raise ValueError("GROUP_NOT_FOUND")
     normalized_ipv4_address = _validate_user_ipv4_address(paths, username=username, group=group, ipv4_address=ipv4_address, users=users)
+    # END_BLOCK_CREATE_USER_PREPARE
     if not _uses_json_user_store(paths.users_file):
+        # START_BLOCK_CREATE_USER_PLAIN_MUTATION
         generated_password = secrets.token_urlsafe(18)
         command = _with_prefix(paths, (paths.ocpasswd_bin, "-c", str(paths.users_file), *(("-g", group) if group else ()), username))
         result = subprocess.run(command, input=f"{generated_password}\n{generated_password}\n", capture_output=True, text=True, check=False, timeout=DEFAULT_COMMAND_TIMEOUT)
@@ -570,13 +593,18 @@ def createUserRecord(paths: OcservPaths, username: str, group: str | None, ipv4_
         if normalized_ipv4_address is not None:
             ipv4_addresses[username] = normalized_ipv4_address
         _save_user_metadata(paths, assignments, ipv4_addresses)
+        # END_BLOCK_CREATE_USER_PLAIN_MUTATION
         _sync_user_config(paths, username, normalized_ipv4_address)
+        # START_BLOCK_CREATE_USER_PLAIN_RESULT
         created_users = _load_user_payload(paths)
-        return {
+        result_payload = {
             "user": _sanitize_user_record(created_users[username]),
             "provisioning": {"one_time_password": generated_password},
         }
+        # END_BLOCK_CREATE_USER_PLAIN_RESULT
+        return result_payload
 
+    # START_BLOCK_CREATE_USER_JSON_MUTATION
     users[username] = {"username": username, "group": group, "disabled": False, "ipv4_address": normalized_ipv4_address}
     if group is not None:
         assignments[username] = group
@@ -584,31 +612,41 @@ def createUserRecord(paths: OcservPaths, username: str, group: str | None, ipv4_
         ipv4_addresses[username] = normalized_ipv4_address
     _save_user_payload(paths, users)
     _save_user_metadata(paths, assignments, ipv4_addresses)
+    # END_BLOCK_CREATE_USER_JSON_MUTATION
     _sync_user_config(paths, username, normalized_ipv4_address)
     return {"user": users[username], "provisioning": None}
 
 
 def disableUserRecord(paths: OcservPaths, username: str) -> dict[str, Any]:
+    # START_BLOCK_DISABLE_USER_PREPARE
     users = _load_user_payload(paths)
     if username not in users:
         raise ValueError("USER_NOT_FOUND")
+    # END_BLOCK_DISABLE_USER_PREPARE
     if not _uses_json_user_store(paths.users_file):
+        # START_BLOCK_DISABLE_USER_PLAIN_MUTATION
         result = _run_command(_with_prefix(paths, (paths.ocpasswd_bin, "-c", str(paths.users_file), "-l", username)))
         if not result.ok:
             raise ValueError("USER_DISABLE_FAILED")
+        # END_BLOCK_DISABLE_USER_PLAIN_MUTATION
         return _sanitize_user_record(_load_user_payload(paths)[username])
+    # START_BLOCK_DISABLE_USER_MUTATION
     users[username]["disabled"] = True
     _save_user_payload(paths, users)
+    # END_BLOCK_DISABLE_USER_MUTATION
     return users[username]
 
 
 def deleteUserRecord(paths: OcservPaths, username: str) -> dict[str, Any]:
+    # START_BLOCK_DELETE_USER_PREPARE
     users = _load_user_payload(paths)
     assignments = _load_user_group_map(paths, users)
     ipv4_addresses = _load_user_ipv4_map(paths, users)
     if username not in users:
         raise ValueError("USER_NOT_FOUND")
+    # END_BLOCK_DELETE_USER_PREPARE
     if not _uses_json_user_store(paths.users_file):
+        # START_BLOCK_DELETE_USER_PLAIN_MUTATION
         removed = _sanitize_user_record(users[username])
         result = _run_command(_with_prefix(paths, (paths.ocpasswd_bin, "-c", str(paths.users_file), "-d", username)))
         if not result.ok:
@@ -616,19 +654,23 @@ def deleteUserRecord(paths: OcservPaths, username: str) -> dict[str, Any]:
         assignments.pop(username, None)
         ipv4_addresses.pop(username, None)
         _save_user_metadata(paths, assignments, ipv4_addresses)
+        # END_BLOCK_DELETE_USER_PLAIN_MUTATION
         _sync_user_config(paths, username, None)
         return removed
 
+    # START_BLOCK_DELETE_USER_MUTATION
     removed = users.pop(username)
     assignments.pop(username, None)
     ipv4_addresses.pop(username, None)
     _save_user_payload(paths, users)
     _save_user_metadata(paths, assignments, ipv4_addresses)
+    # END_BLOCK_DELETE_USER_MUTATION
     _sync_user_config(paths, username, None)
     return removed
 
 
 def assignGroupRecord(paths: OcservPaths, username: str, group: str) -> dict[str, Any]:
+    # START_BLOCK_ASSIGN_GROUP_PREPARE
     allowed_groups = listAllowedGroups(paths)
     if group not in allowed_groups:
         raise ValueError("GROUP_NOT_FOUND")
@@ -637,15 +679,19 @@ def assignGroupRecord(paths: OcservPaths, username: str, group: str) -> dict[str
     if username not in users:
         raise ValueError("USER_NOT_FOUND")
     _validate_user_ipv4_address(paths, username=username, group=group, ipv4_address=users[username].get("ipv4_address"), users=users)
+    # END_BLOCK_ASSIGN_GROUP_PREPARE
+    # START_BLOCK_ASSIGN_GROUP_MUTATION
     users[username]["group"] = group
     assignments[username] = group
     _save_user_payload(paths, users)
     _save_user_group_map(paths, assignments)
+    # END_BLOCK_ASSIGN_GROUP_MUTATION
     _sync_user_config(paths, username, users[username].get("ipv4_address"))
     return _sanitize_user_record(users[username])
 
 
 def updateUserIpRecord(paths: OcservPaths, username: str, ipv4_address: str) -> dict[str, Any]:
+    # START_BLOCK_UPDATE_USER_IP_PREPARE
     users = _load_user_payload(paths)
     assignments = _load_user_group_map(paths, users)
     ipv4_addresses = _load_user_ipv4_map(paths, users)
@@ -661,11 +707,14 @@ def updateUserIpRecord(paths: OcservPaths, username: str, ipv4_address: str) -> 
     )
     if normalized_ipv4_address is None:
         raise ValueError("INVALID_IPV4_ADDRESS")
+    # END_BLOCK_UPDATE_USER_IP_PREPARE
+    # START_BLOCK_UPDATE_USER_IP_MUTATION
     users[username]["ipv4_address"] = normalized_ipv4_address
     ipv4_addresses[username] = normalized_ipv4_address
     if _uses_json_user_store(paths.users_file):
         _save_user_payload(paths, users)
     _save_user_metadata(paths, assignments, ipv4_addresses)
+    # END_BLOCK_UPDATE_USER_IP_MUTATION
     _sync_user_config(paths, username, normalized_ipv4_address)
     return _sanitize_user_record(users[username])
 
@@ -677,6 +726,7 @@ def createGroupRecord(
     ipv4_netmask: str | None,
     routes: list[str],
 ) -> dict[str, Any]:
+    # START_BLOCK_CREATE_GROUP_MUTATION
     if group in listAllowedGroups(paths):
         raise ValueError("GROUP_ALREADY_EXISTS")
     payload = _read_json(paths.groups_file, {"groups": []}) if not paths.groups_file.is_dir() else {"groups": []}
@@ -686,7 +736,9 @@ def createGroupRecord(
     normalized_groups = sorted(set([item for item in existing_groups if isinstance(item, str)] + [group]))
     if not paths.groups_file.is_dir():
         _write_json(paths.groups_file, {"groups": normalized_groups})
+    # END_BLOCK_CREATE_GROUP_MUTATION
 
+    # START_BLOCK_CREATE_GROUP_TEMPLATE_SYNC
     template_dir = _resolved_group_template_dir(paths)
     template_dir.mkdir(parents=True, exist_ok=True)
     template_path = template_dir / f"{group}.conf.tpl"
@@ -700,6 +752,7 @@ def createGroupRecord(
         for route in routes:
             lines.append(f"route = {route}")
     template_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    # END_BLOCK_CREATE_GROUP_TEMPLATE_SYNC
     return {
         "group": group,
         "group_details": {
@@ -712,6 +765,7 @@ def createGroupRecord(
 
 
 def deleteGroupRecord(paths: OcservPaths, group: str) -> dict[str, Any]:
+    # START_BLOCK_DELETE_GROUP_SAFETY
     if group in {"default", "admins"}:
         raise ValueError("PROTECTED_GROUP")
     users = _load_user_payload(paths)
@@ -720,7 +774,9 @@ def deleteGroupRecord(paths: OcservPaths, group: str) -> dict[str, Any]:
         raise ValueError("GROUP_IN_USE")
     if group not in listAllowedGroups(paths):
         raise ValueError("GROUP_NOT_FOUND")
+    # END_BLOCK_DELETE_GROUP_SAFETY
 
+    # START_BLOCK_DELETE_GROUP_MUTATION
     if not paths.groups_file.is_dir() and paths.groups_file.exists():
         payload = _read_json(paths.groups_file, {"groups": []})
         existing_groups = payload.get("groups", []) if isinstance(payload, dict) else []
@@ -733,10 +789,12 @@ def deleteGroupRecord(paths: OcservPaths, group: str) -> dict[str, Any]:
     template_path = _resolved_group_template_dir(paths) / f"{group}.conf.tpl"
     if template_path.exists():
         template_path.unlink()
+    # END_BLOCK_DELETE_GROUP_MUTATION
     return {"group": group, "group_details": {"group": group}}
 
 
 def disableUsersInGroupRecord(paths: OcservPaths, group: str) -> dict[str, Any]:
+    # START_BLOCK_DISABLE_GROUP_USERS_SELECT_TARGETS
     users = _load_user_payload(paths)
     assignments = _load_user_group_map(paths, users)
     target_users = sorted(
@@ -748,12 +806,16 @@ def disableUsersInGroupRecord(paths: OcservPaths, group: str) -> dict[str, Any]:
         raise ValueError("GROUP_NOT_FOUND")
     if not target_users:
         return {"group": group, "affected_users": []}
+    # END_BLOCK_DISABLE_GROUP_USERS_SELECT_TARGETS
+    # START_BLOCK_DISABLE_GROUP_USERS_FLOW
     for username in target_users:
         disableUserRecord(paths, username)
-    return {
+    result_payload = {
         "group": group,
         "affected_users": [_sanitize_user_record(_load_user_payload(paths)[username]) for username in target_users],
     }
+    # END_BLOCK_DISABLE_GROUP_USERS_FLOW
+    return result_payload
 
 
 # --- Backward-compatible re-exports ---
